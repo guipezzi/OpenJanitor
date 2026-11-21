@@ -1,0 +1,24 @@
+{
+  "name": "openjanitor",
+  "private": true,
+  "description": "OpenJanitor desktop app: npm workspace root with the Tauri CLI and UI scripts.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "workspaces": [
+    "ui"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "lint": "npm run lint --workspace ui",
+    "typecheck": "npm run typecheck --workspace ui",
+    "test": "npm run test --workspace ui"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6"
+  }
+}

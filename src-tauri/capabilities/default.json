@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window. Core APIs only: no file system, shell, or HTTP plugins. File operations go through Rust commands and oj-safety.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

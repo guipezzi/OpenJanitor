@@ -6,6 +6,11 @@
     PLANNING.md section 9, rule 1: only the safety kernel may delete or move files.
     This scans Rust, TypeScript, and JavaScript sources (tests included) and
     every Cargo.toml / package.json for delete and move APIs.
+
+    It also keeps the UI away from the file system: the Tauri file system and
+    shell plugins are banned, and the window's capabilities
+    (src-tauri/capabilities) can't grant fs or shell permissions. The UI can
+    only call the Rust commands in src-tauri.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -24,6 +29,9 @@ $patterns = @(
     '\bfs\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|rename|renameSync)\b'
     'tauri-plugin-fs'
     '@tauri-apps/plugin-fs'
+    'tauri-plugin-shell'
+    '@tauri-apps/plugin-shell'
+    '"(fs|shell):'
 )
 $regex = [string]::Join('|', $patterns)
 
@@ -31,9 +39,14 @@ $excluded = @(
     (Join-Path $root 'crates\oj-safety')
     (Join-Path $root 'target')
     (Join-Path $root '.git')
+    (Join-Path $root 'ui\dist')
+    (Join-Path $root 'src-tauri\gen')
 )
 
-$files = Get-ChildItem -Path $root -Recurse -File -Include *.rs, *.ts, *.tsx, *.js, *.jsx, *.mjs, Cargo.toml, package.json |
+$files = @(
+    Get-ChildItem -Path $root -Recurse -File -Include *.rs, *.ts, *.tsx, *.js, *.jsx, *.mjs, Cargo.toml, package.json
+    Get-ChildItem -Path (Join-Path $root 'src-tauri\capabilities') -Recurse -File -ErrorAction SilentlyContinue
+) |
     Where-Object {
         $path = $_.FullName
         -not ($excluded | Where-Object { $path.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) }) -and
@@ -49,9 +62,9 @@ $violations = foreach ($file in $files) {
 }
 
 if ($violations) {
-    Write-Host 'Delete or move calls found outside crates/oj-safety (PLANNING.md section 9):' -ForegroundColor Red
+    Write-Host 'Delete or move calls, or UI file system access, found outside crates/oj-safety (PLANNING.md section 9):' -ForegroundColor Red
     $violations | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
 
-Write-Host ("Guardrails OK: checked {0} files, no delete or move calls outside crates/oj-safety." -f @($files).Count)
+Write-Host ("Guardrails OK: checked {0} files, no delete or move calls outside crates/oj-safety and no UI file system access." -f @($files).Count)
