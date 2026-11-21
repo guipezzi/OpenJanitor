@@ -5,6 +5,9 @@
 node_modules/
 dist/
 
+# Tauri generated files (permission schemas)
+/src-tauri/gen/
+
 # Editors and OS
 .vscode/
 .idea/

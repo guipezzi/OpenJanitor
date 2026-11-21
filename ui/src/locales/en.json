@@ -1,0 +1,33 @@
+{
+  "app": {
+    "tagline": "Free, open source disk cleaner",
+    "preview": "Preview"
+  },
+  "scan": {
+    "title": "Simple clean",
+    "description": "Finds temporary files and caches that Windows and your apps recreate when they need them.",
+    "start": "Scan",
+    "again": "Scan again",
+    "scanning": "Scanning…",
+    "idle": "Scanning only reads your drive. Nothing is deleted or moved.",
+    "error": "The scan couldn't finish",
+    "notInApp": "Scanning works in the desktop app. Start it with \"npm run dev\" from the project folder.",
+    "summary_one": "can be freed from {{count, number}} file",
+    "summary_other": "can be freed from {{count, number}} files",
+    "nothingDeleted": "Nothing was deleted. Cleaning arrives in a later version."
+  },
+  "results": {
+    "item": "Item",
+    "risk": "Risk",
+    "files": "Files",
+    "size": "Size",
+    "noLocations": "Not found on this PC",
+    "notDetected": "App not installed",
+    "needsAdmin": "Needs administrator rights"
+  },
+  "risk": {
+    "low": "Low",
+    "medium": "Medium",
+    "review": "Review"
+  }
+}

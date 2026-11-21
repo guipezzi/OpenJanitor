@@ -2,7 +2,7 @@
 
 A free, open source disk cleaner for Windows. No paywalls, no telemetry.
 
-> **Status:** early development (phase 0). Nothing here is ready for everyday use yet.
+> **Status:** early development. The app opens and runs a read-only scan, but it can't clean anything yet. Nothing here is ready for everyday use.
 
 OpenJanitor finds temporary, obsolete, and unnecessary files and helps you reclaim disk space **safely**:
 
@@ -21,8 +21,11 @@ crates/
   oj-safety/   deny list, path validation, deletion (the only crate allowed to delete files)
   oj-windows/  read-only wrappers around Windows APIs
   oj-cli/      command line tool (for development)
+src-tauri/     desktop app shell (Tauri 2): the window and the commands the UI can call
+ui/            user interface (React, TypeScript, Tailwind CSS, shadcn/ui)
 rules/         cleaning rules (TOML)
 scripts/       development scripts
+docs/          extra documentation, such as asset licenses
 ```
 
 ## Building
@@ -31,12 +34,30 @@ You need:
 
 - [Rust](https://rustup.rs) (stable, MSVC toolchain)
 - Visual Studio Build Tools with the **Desktop development with C++** workload
+- [Node.js](https://nodejs.org) 24 or later (LTS)
+- Microsoft Edge WebView2, which comes with Windows 10 and 11
 
-Then:
+Install the UI dependencies once:
 
 ```powershell
-cargo build
-cargo test
+npm install
+```
+
+## Running the app
+
+```powershell
+npm run dev
+```
+
+This opens the OpenJanitor window. The first run compiles the Rust code and takes a few minutes. Changes to the UI show up right away; changes to Rust code restart the app.
+
+In this preview the app can only scan. It never deletes or moves anything.
+
+## Testing
+
+```powershell
+cargo test --workspace
+npm test
 ```
 
 ## Trying the scanner

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- OpenJanitor app icon, drawn for this project. Source for "npm run tauri icon". -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14b8a6"/>
+      <stop offset="1" stop-color="#0369a1"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#tile)"/>
+  <path fill="#ffffff" d="M456 236 C480 452 548 520 764 544 C548 568 480 636 456 852 C432 636 364 568 148 544 C364 520 432 452 456 236 Z"/>
+  <path fill="#ffffff" fill-opacity="0.85" d="M760 168 C770 250 794 274 876 284 C794 294 770 318 760 400 C750 318 726 294 644 284 C726 274 750 250 760 168 Z"/>
+</svg>

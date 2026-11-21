@@ -1,6 +1,6 @@
 # OpenJanitor — Project Plan
 
-> **Status:** phase 0 in progress (Rust core, rules, CLI, and CI done; UI scaffold next) · **Last updated:** 2026-11-21
+> **Status:** phase 0 done (Rust core, rules, CLI, CI, and the Tauri app with a read-only scan); phase 1 next · **Last updated:** 2026-11-21
 >
 > This document is the source of truth for scope and design decisions. Change it through pull requests, like code.
 
@@ -162,6 +162,7 @@ openjanitor/
 ├─ ui/              # React + TypeScript + Tailwind CSS + shadcn/ui
 ├─ rules/           # TOML rule files, rule tests, locales/
 ├─ docs/
+├─ package.json     # npm workspace root: Tauri CLI and UI scripts
 └─ PLANNING.md
 ```
 
@@ -368,7 +369,7 @@ Candidate crates, to validate in phase 0: `windows` (Win32 APIs), `serde` + `tom
 
 Most of the code will be AI-generated. These rules keep it safe:
 
-1. **Only `oj-safety` may delete or move files.** CI fails if `remove_file`, `remove_dir`, `remove_dir_all`, `rename`, or the equivalent Win32 calls appear anywhere else.
+1. **Only `oj-safety` may delete or move files.** CI fails if `remove_file`, `remove_dir`, `remove_dir_all`, `rename`, or the equivalent Win32 calls appear anywhere else. The UI gets no file system or shell access at all: no Tauri `fs` or `shell` plugin, and its capabilities allow only `core:default`. It reaches the disk only through Rust commands in `src-tauri`.
 2. **Tests never touch the real system.** They use temp directories and a fixture generator that builds fake profiles: temp files, junctions, read-only files, locked files, hard links.
 3. **Dry-run mode (`OJ_DRY_RUN=1`)** makes every destructive operation log instead of act. Dev builds default to dry-run; turning it off is explicit.
 4. **CI on every push:** `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, UI lint, typecheck and tests, and the check from item 1.

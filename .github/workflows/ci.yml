@@ -20,7 +20,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Guardrails (only oj-safety may delete or move files)
+      - name: Guardrails (only oj-safety may delete or move files; no UI file system access)
         shell: pwsh
         run: ./scripts/check-guardrails.ps1
 
@@ -32,3 +32,29 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+  ui:
+    name: UI
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build --workspace ui

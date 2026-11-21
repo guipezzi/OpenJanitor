@@ -10,6 +10,8 @@ Thanks for helping. OpenJanitor deletes files on people's computers, so safety c
 4. **English everywhere:** code, comments, commits, issues, and docs.
 5. **Small pull requests.** Changes to `oj-safety` get extra review.
 6. `unsafe` code is only allowed in `crates/oj-windows`, in small, commented blocks.
+7. **The UI never touches files directly.** It has no Tauri file system or shell plugin, and its capabilities (`src-tauri/capabilities/`) only allow `core:default`. Anything that reads or changes the disk is a Rust command in `src-tauri`.
+8. **Every UI string is a translation key** in `ui/src/locales/en.json`. Don't write text directly in components.
 
 ## Before you open a pull request
 
@@ -20,6 +22,10 @@ Run the same checks CI runs:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+npm ci
+npm run lint
+npm run typecheck
+npm test
 ```
 
 ## Dry-run mode
