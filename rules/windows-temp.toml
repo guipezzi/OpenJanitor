@@ -1,0 +1,24 @@
+# Temporary folders. Format: PLANNING.md §5.3.
+# Paths use single-quoted (literal) TOML strings so backslashes need no escaping.
+
+[[rule]]
+id          = "windows.temp.user"
+category    = "temporary-files"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = ['%TEMP%']
+min_age     = "24h"
+name        = "User temporary files"
+description = "Files programs create while running. They're recreated when needed."
+
+[[rule]]
+id          = "windows.temp.system"
+category    = "temporary-files"
+level       = "simple"
+risk        = "low"
+needs_admin = true
+paths       = ['%WINDIR%\Temp']
+min_age     = "24h"
+name        = "System temporary files"
+description = "Temporary files created by Windows and installers. They're recreated when needed."

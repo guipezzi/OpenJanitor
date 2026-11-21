@@ -1,0 +1,12 @@
+# Rust build output
+/target/
+
+# Node / UI build output
+node_modules/
+dist/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db

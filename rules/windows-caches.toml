@@ -1,0 +1,25 @@
+# Caches and crash reports Windows rebuilds or no longer needs. Format: PLANNING.md §5.3.
+
+[[rule]]
+id          = "windows.crash-dumps.user"
+category    = "crash-reports"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = ['%LOCALAPPDATA%\CrashDumps']
+include     = ["*.dmp"]
+min_age     = "24h"
+name        = "Application crash dumps"
+description = "Memory dumps saved when a program crashed. They're only useful for debugging that crash."
+
+[[rule]]
+id          = "windows.thumbnail-cache"
+category    = "system-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = ['%LOCALAPPDATA%\Microsoft\Windows\Explorer']
+include     = ["thumbcache_*.db", "iconcache_*.db"]
+min_age     = "24h"
+name        = "Thumbnail cache"
+description = "Preview images File Explorer saves for faster browsing. Windows rebuilds them as needed."
