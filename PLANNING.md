@@ -52,10 +52,15 @@ Commercial cleaners usually lock their most useful features behind a paywall. Op
 | D14 | Disk usage visuals | Segmented bar, donut, sunburst, treemap, and a sorted list, drawn with Apache ECharts ([§7.8](#78-disk-usage-visualization)) |
 | D15 | Drives           | System drive by default; other internal and external (USB) drives can be selected; network drives not supported ([§7.9](#79-drive-selection)) |
 | D16 | Storage          | JSON files: settings, the Protected list, history as JSON Lines, and one manifest per quarantine batch. No database for now ([§8](#8-tech-stack)) |
-| D17 | "Select recommended" | Low-risk items only; medium and review items are always selected by hand ([§7.1](#71-main-screen)) |
+| D17 | "Select recommended" | Low-risk items only; medium and review items are always selected by hand ([§7.1](#71-main-screen)). A low-risk rule can opt out (D24) |
 | D18 | Install location | Per-machine install in Program Files, so a standard user (or malware running as one) can't replace the elevated helper ([§4.6](#46-privilege-model)) |
 | D19 | Minimum Windows  | Windows 10 22H2 and Windows 11, x64. ARM64 later                         |
 | D20 | pt-BR            | Ships at the end of phase 1, before v0.1.0 ([§7.7](#77-internationalization)) |
+| D21 | Quarantine identity | Items are identified by size, modified time, and file ID, not by a content hash. A BLAKE3 hash is computed only when a feature needs it, and the manifest has an optional field for it ([§4.5](#45-quarantine)) |
+| D22 | System quarantine | Files the elevated helper moves go to `%PROGRAMDATA%\OpenJanitor\Quarantine`, which only administrators can change ([§4.5](#45-quarantine)) |
+| D23 | Restore with "Replace" | The file currently at the destination goes to quarantine instead of being overwritten ([§4.5](#45-quarantine)) |
+| D24 | Risk vs. recommended | Risk answers "can losing this hurt?"; a separate `recommended` flag answers "should it be preselected?" ([§5.3](#53-rule-engine)) |
+| D25 | Expired system items | No UAC prompt at startup: they're purged during the next cleanup that already uses the helper, or with an "Empty (needs admin)" button ([§4.5](#45-quarantine)) |
 
 ## 4. Safety model
 
@@ -116,17 +121,22 @@ Default policy per risk level (all configurable):
 A setting, "Always quarantine everything", exists for cautious users.
 
 - **Quarantine doesn't free space until it's purged.** The UI shows both numbers, for example "Freed now: 5.5 GB · Will be freed on Dec 20: 3.9 GB", next to an "Empty quarantine now" button.
-- **One quarantine folder per volume**, so moving a file is an instant rename instead of a slow copy across drives:
-  - **System drive:** `%LOCALAPPDATA%\OpenJanitor\Quarantine\`. It's on the same volume, it's already private to the user, and it leaves no hidden folder at the drive root. Items the helper moves keep their own ACLs, so they stay readable only by SYSTEM and Administrators.
+- **One quarantine folder per volume**, so moving a file is an instant rename instead of a slow copy across drives. Files are never copied: a move that would cross drives is refused.
+  - **System drive, your files:** `%LOCALAPPDATA%\OpenJanitor\Quarantine\`. It's on the same volume, it's already private to the user, and it leaves no hidden folder at the drive root.
+  - **System drive, system files:** `%PROGRAMDATA%\OpenJanitor\Quarantine\`, used by the elevated helper and changeable only by administrators (D22). If the helper used the personal folder, a program running as the user could edit a manifest or swap a stored file, and the helper would then restore it with admin rights. Restoring from here goes through the helper (one UAC prompt).
   - **Other drives:** `X:\.openjanitor\quarantine\`. The folder is hidden and its ACL is restricted to the user, plus SYSTEM and Administrators for items the helper moved.
 - **Drives are identified by volume GUID** (`\\?\Volume{…}\`), not by drive letter, because letters can change when an external drive is reconnected. Each volume's quarantine keeps its own manifests, and the app keeps an index of all of them.
 - **Disconnected drives:** their quarantined items show as "drive not connected" and can't be restored or purged until the drive is back. Expired items are purged the next time it's connected.
 - **Unplugged mid-cleanup:** the operation stops. Each item's manifest entry is written before the item is moved, so everything already moved can still be restored.
 - **FAT32 and exFAT drives** (common on USB sticks) have no ACLs, so their quarantine folder can't be restricted to the user. The UI says so when quarantining there.
-- **A manifest for each quarantine batch** (a JSON file next to the items) records the original path, timestamps, attributes, ACL, size, BLAKE3 hash, rule id, and date: enough to restore each item exactly.
+- **Batches:** each cleanup that quarantines something creates a folder named after its date and time (UTC), holding `manifest.json` and the files under numbered names (`items/000001`, ...). Numbered names without extensions mean nothing in quarantine can be started by accident.
+- **The manifest** (JSON, with a format version) records, for each item: its state, original path, size, allocated size, modified time, file ID, rule id, and when it was quarantined and expires. Permissions and timestamps aren't copied into it: a rename on the same volume keeps them on the file itself.
+- **No content hash by default (D21).** Moving within a drive can't change the contents, and hashing means reading every byte (gigabytes for big caches). The stored file's identity is checked with size, modified time, and file ID instead. A BLAKE3 function exists in `oj-safety` for features that need one (checking a copy between drives, telling whether a restore conflict is the same file), and the manifest has an optional `hash` field.
+- **Crash-safe:** each step is written to the manifest before it happens ("moving in", "restoring"), and the manifest itself is replaced atomically. At startup, recovery checks every unfinished step and finds the file at its original path or in the batch. A file is never in neither place.
+- **Nothing in a manifest is trusted:** stored names must be exactly `items/` plus the item's number, restore destinations go through the deny list, and a stored file must still be the same file before it's restored or deleted.
 - **In practice, most simple-clean items skip quarantine:** they're low risk, so the default policy deletes them directly. Quarantine is used for medium and review items, and for everything when "Always quarantine everything" is on.
-- **Restore conflicts:** if something exists at the original path again, the user picks Replace, Keep both, or Skip.
-- Expired items are purged when the app starts (and by scheduled cleaning, phase 4).
+- **Restore conflicts:** if something exists at the original path again, the user picks Replace, Keep both ("name (restored).ext"), or Skip. Replace moves the current file into quarantine first, so nothing is lost (D23). Missing parent folders are recreated.
+- Expired items are purged when the app starts (and by scheduled cleaning, phase 4). Expired items in the system quarantine need admin rights, so they wait for the next cleanup that already uses the helper, or for an "Empty (needs admin)" button; the app never shows a UAC prompt just for starting (D25).
 - The Quarantine screen reuses the results tree component, with Restore and Delete now actions.
 
 ### 4.6 Privilege model
@@ -220,6 +230,7 @@ description = "Removes superseded Windows components with DISM. Never deletes Wi
 ```
 
 - An optional `detect` field shows a rule only when its app exists (for example, Discord's folder).
+- An optional `recommended = false` keeps a low-risk rule out of "Select recommended" (D24). Risk answers "can losing this hurt?"; `recommended` answers "should it be preselected?". Big caches that just grow back (graphics driver shader caches) are low risk but not recommended.
 - Every rule ships with a test: a fixture folder layout and the findings it should produce.
 - Translations live in `rules/locales/<lang>.toml`, keyed by rule id.
 
@@ -251,7 +262,7 @@ struct Finding {
 - Thumbnail cache
 - Windows Error Reporting files and crash dumps
 - Delivery Optimization cache
-- Shader caches (DirectX, NVIDIA, AMD, Intel), only files untouched for 30 days. Games rebuild them on the next launch (sometimes for minutes), and the driver caches can reach many gigabytes, so NVIDIA, AMD, and Intel are medium risk and "Select recommended" leaves them out.
+- Shader caches (DirectX, NVIDIA, AMD, Intel), only files untouched for 30 days. Games rebuild them on the next launch (sometimes for minutes), and the driver caches can reach many gigabytes, so NVIDIA, AMD, and Intel are low risk but not recommended: "Select recommended" leaves them out, and selected ones are deleted directly rather than held in quarantine (D24).
 - App caches: Discord, Teams, Slack, VS Code. Spotify waits until its folders are checked on a real install: downloaded songs can share a folder with its cache.
 - Old log files in `%WINDIR%\Logs` (30 days untouched, medium risk, so they go to quarantine by default)
 
@@ -288,7 +299,7 @@ If a browser or app whose cache is selected is still running, the app asks the u
 - Three entry points: **Simple clean** · **Advanced clean** · **Space analysis**
 - Results in a **grouped tree** (Category → Folder → Files), with tri-state checkboxes, sorted by size
 - Each row shows a name, a risk badge (Low / Medium / Review), and a size, plus a shield icon when admin is needed
-- **Nothing is preselected.** A "Select recommended" button selects low-risk items.
+- **Nothing is preselected.** A "Select recommended" button selects low-risk items, except rules marked `recommended = false` (D24).
 - **Details panel** on click: why the item was flagged, rule, evidence, last modified, "Open in Explorer"
 - Footer: selected count and total size, with **Protect** and **Clean** actions. The Clean label reflects the policy (delete or quarantine).
 - Scan progress with a cancel button

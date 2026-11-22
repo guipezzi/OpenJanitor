@@ -168,11 +168,9 @@ impl DenyList {
             list.tree(NormPath::new(folder)?, "your personal folders", Vec::new());
         }
 
-        list.tree(
-            NormPath::new(&system.app_data)?,
-            "OpenJanitor's own data",
-            Vec::new(),
-        );
+        for own in [&system.app_data, &system.system_app_data] {
+            list.tree(NormPath::new(own)?, "OpenJanitor's own data", Vec::new());
+        }
 
         Ok(list)
     }

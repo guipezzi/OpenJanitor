@@ -288,6 +288,22 @@ fn own_data_is_protected() {
 }
 
 #[test]
+fn both_quarantines_are_protected() {
+    let d = deny();
+    assert_tree(
+        &d,
+        r"C:\fake\Users\tester\AppData\Local\OpenJanitor\Quarantine\20261122-143005\items\000001",
+        "OpenJanitor's own data",
+    );
+    assert!(
+        d.check(Path::new(
+            r"C:\fake\ProgramData\OpenJanitor\Quarantine\20261122-143005\manifest.json"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
 fn invalid_paths_are_refused() {
     let d = deny();
     for path in [

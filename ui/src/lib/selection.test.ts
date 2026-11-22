@@ -105,4 +105,10 @@ describe('recommended', () => {
     expect([...choices]).toEqual([[2, true]])
     expect(tallyAll([category], choices, children).total).toEqual({ files: 6, size: 600 })
   })
+
+  it('leaves out low-risk rules that opted out', () => {
+    const bigCache = node(7, 5, 5000, { kind: 'rule', risk: 'low', recommended: false })
+    const graphics = node(6, 5, 5000, { kind: 'category', children: [bigCache] })
+    expect([...recommended([category, graphics])]).toEqual([[2, true]])
+  })
 })

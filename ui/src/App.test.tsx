@@ -32,6 +32,7 @@ function rule(overrides: Partial<RuleReport>): RuleReport {
     category: 'temporary-files',
     level: 'simple',
     risk: 'low',
+    recommended: true,
     needs_admin: false,
     status: 'scanned',
     roots: ['C:\\Users\\test\\AppData\\Local\\Temp'],

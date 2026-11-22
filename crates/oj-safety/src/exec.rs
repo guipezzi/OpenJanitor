@@ -1,11 +1,11 @@
 //! Revalidation and the actual delete (PLANNING.md §4.4).
 //!
-//! This is the only place in OpenJanitor that removes a file. Quarantine
-//! (moving instead of deleting) comes in phase 1 and will live here too.
+//! Together with `quarantine`, this is the only place in OpenJanitor that
+//! removes or moves a file.
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -41,9 +41,28 @@ impl Mode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Outcome {
-    Deleted { freed: u64 },
-    WouldDelete { freed: u64 },
-    Skipped { reason: SkipReason },
+    Deleted {
+        freed: u64,
+    },
+    WouldDelete {
+        freed: u64,
+    },
+    /// Moved into quarantine batch `batch` as item `item`.
+    Quarantined {
+        batch: String,
+        item: u32,
+    },
+    WouldQuarantine,
+    /// Moved back out of quarantine, to `to`.
+    Restored {
+        to: PathBuf,
+    },
+    WouldRestore {
+        to: PathBuf,
+    },
+    Skipped {
+        reason: SkipReason,
+    },
 }
 
 /// Why a file was left alone.
@@ -63,6 +82,13 @@ pub enum SkipReason {
     /// Another program has it open.
     InUse,
     AccessDenied,
+    /// It's on another drive than the quarantine, and files are never
+    /// copied between drives.
+    OtherDrive,
+    /// Something already exists where the file would go.
+    Conflict,
+    /// The quarantine item was already restored, purged, or never moved in.
+    NotInQuarantine,
     Failed(String),
 }
 
@@ -97,9 +123,13 @@ impl<'a> Executor<'a> {
         self.mode
     }
 
+    pub(crate) fn deny(&self) -> &DenyList {
+        self.deny
+    }
+
     /// Checks that `snapshot` may still be acted on: allowed by the deny
     /// list, not protected, still a regular file, and unchanged since the
-    /// scan.
+    /// scan (same size, modified time, and file ID).
     pub fn revalidate(&self, snapshot: &FileSnapshot) -> Result<(), SkipReason> {
         let path = NormPath::new(&snapshot.path)
             .map_err(|e| SkipReason::Denied(DenyReason::InvalidPath(e)))?;
@@ -120,7 +150,11 @@ impl<'a> Executor<'a> {
         if metadata.len() != snapshot.len || modified != Some(snapshot.modified) {
             return Err(SkipReason::Changed);
         }
-        Ok(())
+        match oj_windows::disk_info(&snapshot.path) {
+            Ok(info) if info.file_id == snapshot.file_id => Ok(()),
+            Ok(_) => Err(SkipReason::Changed),
+            Err(e) => Err(skip_reason_for(&e)),
+        }
     }
 
     /// Deletes one file, or reports what would happen in dry-run mode.
@@ -145,13 +179,31 @@ impl<'a> Executor<'a> {
     }
 }
 
-fn skip_reason_for(error: &io::Error) -> SkipReason {
+pub(crate) fn skip_reason_for(error: &io::Error) -> SkipReason {
+    const ERROR_NOT_SAME_DEVICE: i32 = 17;
     const ERROR_SHARING_VIOLATION: i32 = 32;
     const ERROR_LOCK_VIOLATION: i32 = 33;
     match (error.kind(), error.raw_os_error()) {
         (io::ErrorKind::NotFound, _) => SkipReason::Missing,
         (_, Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)) => SkipReason::InUse,
+        (_, Some(ERROR_NOT_SAME_DEVICE)) => SkipReason::OtherDrive,
+        (io::ErrorKind::AlreadyExists, _) => SkipReason::Conflict,
         (io::ErrorKind::PermissionDenied, _) => SkipReason::AccessDenied,
         _ => SkipReason::Failed(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_errors_map_to_skip_reasons() {
+        let reason = |code| skip_reason_for(&io::Error::from_raw_os_error(code));
+        assert_eq!(reason(2), SkipReason::Missing);
+        assert_eq!(reason(5), SkipReason::AccessDenied);
+        assert_eq!(reason(17), SkipReason::OtherDrive);
+        assert_eq!(reason(32), SkipReason::InUse);
+        assert_eq!(reason(183), SkipReason::Conflict);
     }
 }

@@ -5,6 +5,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use oj_windows::FileId;
+
 /// A file as it was at scan time. Before acting on it, the executor checks
 /// that it still looks exactly like this (PLANNING.md §4.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +19,9 @@ pub struct FileSnapshot {
     /// Number of hard links.
     pub links: u32,
     pub modified: SystemTime,
+    /// Which file object this is. A different file put at the same path
+    /// has a different ID.
+    pub file_id: FileId,
 }
 
 impl FileSnapshot {
@@ -30,6 +35,7 @@ impl FileSnapshot {
             allocated: info.allocated,
             links: info.links,
             modified: metadata.modified()?,
+            file_id: info.file_id,
         })
     }
 

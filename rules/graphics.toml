@@ -7,9 +7,10 @@
 # - only files untouched for 30 days are found, which usually means games
 #   that haven't been played lately;
 # - the driver caches (NVIDIA, AMD, Intel), which can reach many gigabytes,
-#   are medium risk: "Select recommended" leaves them out, and the user
-#   picks them on purpose. DirectX's small cache stays low risk, as in
-#   Windows Disk Cleanup.
+#   are low risk (losing them loses no data) but not recommended:
+#   "Select recommended" leaves them out, and the user picks them on
+#   purpose (D24). DirectX's small cache stays recommended, as in Windows
+#   Disk Cleanup.
 
 [[rule]]
 id          = "windows.shader-cache.directx"
@@ -27,7 +28,8 @@ description = "Graphics code Windows compiled for games and apps, untouched for 
 id          = "gpu.nvidia.shader-cache"
 category    = "graphics-caches"
 level       = "simple"
-risk        = "medium"
+risk        = "low"
+recommended = false
 needs_admin = false
 paths       = [
   '%LOCALAPPDATA%\NVIDIA',
@@ -47,7 +49,8 @@ description = "Graphics code the NVIDIA driver compiled for games, untouched for
 id          = "gpu.amd.shader-cache"
 category    = "graphics-caches"
 level       = "simple"
-risk        = "medium"
+risk        = "low"
+recommended = false
 needs_admin = false
 paths       = ['%LOCALAPPDATA%\AMD']
 include     = [
@@ -64,7 +67,8 @@ description = "Graphics code the AMD driver compiled for games, untouched for 30
 id          = "gpu.intel.shader-cache"
 category    = "graphics-caches"
 level       = "simple"
-risk        = "medium"
+risk        = "low"
+recommended = false
 needs_admin = false
 paths       = ['%USERPROFILE%\AppData\LocalLow\Intel\ShaderCache']
 min_age     = "30d"

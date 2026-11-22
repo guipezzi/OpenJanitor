@@ -43,6 +43,9 @@ pub struct NodeView {
     pub rule_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<Risk>,
+    /// Whether "Select recommended" may pick the rule (see `Rule`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<bool>,
     /// Something inside needs administrator rights to clean.
     pub needs_admin: bool,
     pub size_on_disk: u64,
@@ -197,6 +200,7 @@ impl ScanResults {
             name: node.name.clone(),
             rule_id: rule.map(|rule| rule.rule_id.clone()),
             risk: rule.map(|rule| rule.risk),
+            recommended: rule.map(|rule| rule.recommended),
             needs_admin: node.needs_admin,
             size_on_disk: node.size_on_disk,
             file_count: node.file_count,
@@ -429,6 +433,7 @@ mod tests {
             category: category.into(),
             level: Level::Simple,
             risk,
+            recommended: true,
             needs_admin,
             status: RuleStatus::Scanned,
             roots: Vec::new(),
@@ -473,6 +478,7 @@ mod tests {
                         allocated: size,
                         links: 1,
                         modified: UNIX_EPOCH,
+                        file_id: Default::default(),
                     },
                 }
             })
