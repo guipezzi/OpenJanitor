@@ -6,7 +6,7 @@ import { RiskBadge } from '@/components/risk-badge'
 import { Button } from '@/components/ui/button'
 import { formatBytes, formatCount, formatDate } from '@/lib/format'
 import { useNodeLabel } from '@/lib/labels'
-import type { NodeView, RuleReport } from '@/lib/scan'
+import { couldNotRead, type NodeView, type RuleReport } from '@/lib/scan'
 import { cn } from '@/lib/utils'
 
 interface DetailsPanelProps {
@@ -108,6 +108,9 @@ export function DetailsPanel({ node, rule, onReveal, className }: DetailsPanelPr
           <ShieldAlert className="mt-0.5 size-4 shrink-0" />
           {t('details.adminNote')}
         </p>
+      )}
+      {node.kind === 'rule' && rule && couldNotRead(rule) && (
+        <p className="text-sm text-muted-foreground">{t('details.partlyRead')}</p>
       )}
 
       {node.path && (

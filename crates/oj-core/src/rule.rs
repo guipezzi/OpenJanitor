@@ -22,6 +22,23 @@ const BUNDLED: &[(&str, &str)] = &[
         "windows-caches.toml",
         include_str!("../../../rules/windows-caches.toml"),
     ),
+    (
+        "windows-reports.toml",
+        include_str!("../../../rules/windows-reports.toml"),
+    ),
+    (
+        "windows-logs.toml",
+        include_str!("../../../rules/windows-logs.toml"),
+    ),
+    (
+        "graphics.toml",
+        include_str!("../../../rules/graphics.toml"),
+    ),
+    (
+        "browsers.toml",
+        include_str!("../../../rules/browsers.toml"),
+    ),
+    ("apps.toml", include_str!("../../../rules/apps.toml")),
 ];
 
 /// Built-in actions rules may reference (DISM cleanup, emptying the Recycle

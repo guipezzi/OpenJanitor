@@ -88,6 +88,14 @@ export type ScanOutcome =
   | { status: 'completed'; overview: ScanOverview }
   | { status: 'cancelled' }
 
+/**
+ * The rule needs administrator rights and some of its folders couldn't be
+ * read, so it may have missed files. (The elevated helper will read them.)
+ */
+export function couldNotRead(rule: RuleReport): boolean {
+  return rule.needs_admin && rule.walk.unreadable > 0
+}
+
 /** False when the UI runs in a plain browser instead of the Tauri window. */
 export function canScan(): boolean {
   return isTauri()

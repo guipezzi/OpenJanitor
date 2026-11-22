@@ -1,0 +1,72 @@
+# Shader caches: compiled graphics code that games and apps rebuild when
+# needed. Format: PLANNING.md §5.3.
+#
+# Clearing them loses no data, but a game whose cache is gone compiles its
+# shaders again on the next launch (sometimes for minutes, with stutter),
+# and the cache grows back. So:
+# - only files untouched for 30 days are found, which usually means games
+#   that haven't been played lately;
+# - the driver caches (NVIDIA, AMD, Intel), which can reach many gigabytes,
+#   are medium risk: "Select recommended" leaves them out, and the user
+#   picks them on purpose. DirectX's small cache stays low risk, as in
+#   Windows Disk Cleanup.
+
+[[rule]]
+id          = "windows.shader-cache.directx"
+category    = "graphics-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = ['%LOCALAPPDATA%\D3DSCache']
+min_age     = "30d"
+name        = "DirectX shader cache"
+description = "Graphics code Windows compiled for games and apps, untouched for 30 days. It's rebuilt when needed."
+
+# Newer NVIDIA drivers moved the cache to LocalLow\NVIDIA\PerDriverVersion.
+[[rule]]
+id          = "gpu.nvidia.shader-cache"
+category    = "graphics-caches"
+level       = "simple"
+risk        = "medium"
+needs_admin = false
+paths       = [
+  '%LOCALAPPDATA%\NVIDIA',
+  '%USERPROFILE%\AppData\LocalLow\NVIDIA',
+]
+include     = [
+  "DXCache/**",
+  "GLCache/**",
+  "PerDriverVersion/DXCache/**",
+  "PerDriverVersion/GLCache/**",
+]
+min_age     = "30d"
+name        = "NVIDIA shader cache"
+description = "Graphics code the NVIDIA driver compiled for games, untouched for 30 days. Games you play again will compile it again, which can take a few minutes and cause some stutter."
+
+[[rule]]
+id          = "gpu.amd.shader-cache"
+category    = "graphics-caches"
+level       = "simple"
+risk        = "medium"
+needs_admin = false
+paths       = ['%LOCALAPPDATA%\AMD']
+include     = [
+  "DxCache/**",
+  "DxcCache/**",
+  "GLCache/**",
+  "VkCache/**",
+]
+min_age     = "30d"
+name        = "AMD shader cache"
+description = "Graphics code the AMD driver compiled for games, untouched for 30 days. Games you play again will compile it again, which can take a few minutes and cause some stutter."
+
+[[rule]]
+id          = "gpu.intel.shader-cache"
+category    = "graphics-caches"
+level       = "simple"
+risk        = "medium"
+needs_admin = false
+paths       = ['%USERPROFILE%\AppData\LocalLow\Intel\ShaderCache']
+min_age     = "30d"
+name        = "Intel shader cache"
+description = "Graphics code the Intel driver compiled for games, untouched for 30 days. Games you play again will compile it again, which can take a few minutes and cause some stutter."
