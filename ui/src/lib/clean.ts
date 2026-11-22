@@ -15,6 +15,14 @@ export interface QuarantineGroup {
   size: number
 }
 
+/** Selected files left out because their app is open. */
+export interface OpenApp {
+  /** Such as "Google Chrome". */
+  name: string
+  files: number
+  size: number
+}
+
 /** A cleanup plan in totals: what the confirmation shows. */
 export interface CleanPlan {
   plan_id: number
@@ -25,6 +33,8 @@ export interface CleanPlan {
   quarantine: QuarantineGroup[]
   /** Selected, but left out: they need administrator rights. */
   needs_admin: Tally
+  /** Selected, but left out: their app is open. Biggest first. */
+  apps_open: OpenApp[]
   /** When the scan finished, in seconds since the Unix epoch. */
   scanned_at: number
   /** The results are old enough that scanning again first is worth it. */
@@ -52,6 +62,7 @@ export type SkipReason =
   | 'not_in_quarantine'
   | 'not_empty'
   | 'outside_location'
+  | 'app_running'
   | 'failed'
 
 /** What a cleanup did (oj_core::CleanReport). */
@@ -69,6 +80,8 @@ export interface CleanReport {
   not_started: number
   folders_removed: number
   needs_admin: Tally
+  /** Left out because their app was open. */
+  apps_open: OpenApp[]
   history_error?: string
 }
 

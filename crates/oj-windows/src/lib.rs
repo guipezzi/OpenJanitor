@@ -76,7 +76,7 @@ pub enum KnownFolder {
     Windows,
 }
 
-pub use imp::{disk_info, known_folder, long_path};
+pub use imp::{disk_info, known_folder, long_path, running_programs};
 
 #[cfg(windows)]
 mod imp {
@@ -86,7 +86,7 @@ mod imp {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::{Path, PathBuf};
 
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES, HANDLE};
     use windows::Win32::Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS,
         FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
@@ -94,6 +94,11 @@ mod imp {
         GetFileInformationByHandle, GetFileInformationByHandleEx, GetLongPathNameW, OPEN_EXISTING,
     };
     use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     use windows::Win32::UI::Shell::{
         FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
         FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_ProgramData,
@@ -128,8 +133,8 @@ mod imp {
 
     impl Drop for OwnedHandle {
         fn drop(&mut self) {
-            // SAFETY: the handle came from a successful CreateFileW call and is
-            // closed exactly once, here.
+            // SAFETY: the handle came from a successful call that hands
+            // ownership to the caller, and it's closed exactly once, here.
             unsafe {
                 let _ = CloseHandle(self.0);
             }
@@ -238,6 +243,51 @@ mod imp {
         Some(PathBuf::from(OsString::from_wide(&chars)))
     }
 
+    /// The program file names (`chrome.exe`) of the processes running in
+    /// this Windows session, that is, for the signed-in user. Other users'
+    /// programs and services aren't included. Each name appears once per
+    /// process, in no particular order.
+    pub fn running_programs() -> io::Result<Vec<String>> {
+        let session = session_of(std::process::id())?;
+        // SAFETY: plain flags; the snapshot handle is closed by OwnedHandle.
+        let snapshot =
+            unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.map_err(win32_error)?;
+        let snapshot = OwnedHandle(snapshot);
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut names = Vec::new();
+        // SAFETY: `entry` is a valid, writable PROCESSENTRY32W with dwSize
+        // set, as the API requires.
+        let mut next = unsafe { Process32FirstW(snapshot.0, &mut entry) };
+        while next.is_ok() {
+            // A process whose session can't be read is kept: listing an app
+            // as running only means its files wait for another cleanup.
+            let other_session = matches!(session_of(entry.th32ProcessID), Ok(s) if s != session);
+            if !other_session {
+                let name = &entry.szExeFile;
+                let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+                names.push(String::from_utf16_lossy(&name[..len]));
+            }
+            // SAFETY: as above.
+            next = unsafe { Process32NextW(snapshot.0, &mut entry) };
+        }
+        match next {
+            Err(e) if e.code() == ERROR_NO_MORE_FILES.to_hresult() => Ok(names),
+            Err(e) => Err(win32_error(e)),
+            Ok(()) => Ok(names),
+        }
+    }
+
+    /// The Windows session a process runs in.
+    fn session_of(process: u32) -> io::Result<u32> {
+        let mut session = 0;
+        // SAFETY: `session` is a valid, writable u32.
+        unsafe { ProcessIdToSessionId(process, &mut session) }.map_err(win32_error)?;
+        Ok(session)
+    }
+
     /// Expands 8.3 short names (`C:\PROGRA~1`) to their long form.
     ///
     /// Returns the input unchanged if the path doesn't exist or can't be
@@ -285,5 +335,23 @@ mod imp {
 
     pub fn long_path(path: &Path) -> PathBuf {
         path.to_path_buf()
+    }
+
+    pub fn running_programs() -> io::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn this_test_shows_up_among_the_running_programs() {
+        let me = std::env::current_exe().unwrap();
+        let name = me.file_name().unwrap().to_string_lossy().to_lowercase();
+        let running = super::running_programs().unwrap();
+        assert!(
+            running.iter().any(|p| p.to_lowercase() == name),
+            "{name} not in {running:?}"
+        );
     }
 }

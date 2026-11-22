@@ -4,6 +4,10 @@
 # are never matched here, and the deny list in oj-safety protects those
 # files by name anyway (PLANNING.md §4.2).
 #
+# Each rule names its browser's program files (`app`). While the browser
+# runs, its cache is left out of cleanups, and the confirmation asks you to
+# close it (PLANNING.md §6.1).
+#
 # Chromium browsers (Chrome, Edge, Brave) keep one folder per profile
 # ("Default", "Profile 1", ...) inside "User Data", so the patterns start
 # with "*/" for the profile. Shader caches sit directly in "User Data".
@@ -28,6 +32,7 @@ include     = [
   "GPUPersistentCache/**",
 ]
 min_age     = "24h"
+app         = { name = "Google Chrome", processes = ["chrome.exe"] }
 name        = "Google Chrome cache"
 description = "Copies of web pages, images, and scripts Chrome saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
 
@@ -51,6 +56,7 @@ include     = [
   "GPUPersistentCache/**",
 ]
 min_age     = "24h"
+app         = { name = "Microsoft Edge", processes = ["msedge.exe"] }
 name        = "Microsoft Edge cache"
 description = "Copies of web pages, images, and scripts Edge saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
 
@@ -74,6 +80,7 @@ include     = [
   "GPUPersistentCache/**",
 ]
 min_age     = "24h"
+app         = { name = "Brave", processes = ["brave.exe"] }
 name        = "Brave cache"
 description = "Copies of web pages, images, and scripts Brave saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
 
@@ -104,6 +111,7 @@ include     = [
   "ShaderCache/**",
 ]
 min_age     = "24h"
+app         = { name = "Opera", processes = ["opera.exe"] }
 name        = "Opera cache"
 description = "Copies of web pages, images, and scripts Opera and Opera GX saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
 
@@ -125,5 +133,6 @@ include     = [
   "*/shader-cache/**",
 ]
 min_age     = "24h"
+app         = { name = "Firefox", processes = ["firefox.exe"] }
 name        = "Firefox cache"
 description = "Copies of web pages, images, and scripts Firefox saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."

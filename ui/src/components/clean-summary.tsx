@@ -1,4 +1,12 @@
-import { Archive, CircleCheck, CircleStop, FolderMinus, ShieldAlert, TriangleAlert } from 'lucide-react'
+import {
+  AppWindow,
+  Archive,
+  CircleCheck,
+  CircleStop,
+  FolderMinus,
+  ShieldAlert,
+  TriangleAlert,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -67,6 +75,15 @@ export function CleanSummary({ report }: { report: CleanReport }) {
         {report.needs_admin.files > 0 && (
           <Line icon={<ShieldAlert className="text-muted-foreground" />}>
             {t('clean.adminLeftOut', { count: report.needs_admin.files })}
+          </Line>
+        )}
+        {report.apps_open.length > 0 && (
+          <Line icon={<AppWindow className="text-muted-foreground" />}>
+            {t('clean.appsLeftOut', {
+              apps: new Intl.ListFormat(locale, { type: 'conjunction' }).format(
+                report.apps_open.map((app) => app.name),
+              ),
+            })}
           </Line>
         )}
       </ul>

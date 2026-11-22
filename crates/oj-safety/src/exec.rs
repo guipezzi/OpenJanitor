@@ -96,6 +96,9 @@ pub enum SkipReason {
     /// The folder isn't inside the rule location it was found in, or it's
     /// that location itself.
     OutsideLocation,
+    /// The app the file belongs to is running. The cleanup decides this
+    /// before asking the executor, which never sees the file.
+    AppRunning,
     Failed(String),
 }
 
@@ -115,6 +118,7 @@ impl SkipReason {
             SkipReason::NotInQuarantine => "not_in_quarantine",
             SkipReason::NotEmpty => "not_empty",
             SkipReason::OutsideLocation => "outside_location",
+            SkipReason::AppRunning => "app_running",
             SkipReason::Failed(_) => "failed",
         }
     }
@@ -303,6 +307,7 @@ mod tests {
             SkipReason::NotInQuarantine,
             SkipReason::NotEmpty,
             SkipReason::OutsideLocation,
+            SkipReason::AppRunning,
             SkipReason::Failed("boom".into()),
         ];
         for reason in reasons {

@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_core::{
     CancelToken, ChildPage, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy,
-    RuleReport, ScanReport, ScanResults,
+    RuleReport, RunningPrograms, ScanReport, ScanResults,
 };
 use oj_safety::{Entry, EntryKind, Mode, ProtectedList};
 use serde::Serialize;
@@ -158,6 +158,7 @@ impl AppState {
         scan_id: u64,
         choices: &HashMap<NodeId, bool>,
         policy: &Policy,
+        running: &RunningPrograms,
         mode: Mode,
         now: SystemTime,
     ) -> Result<PlanView, String> {
@@ -166,7 +167,7 @@ impl AppState {
             .as_mut()
             .filter(|session| session.id == scan_id)
             .ok_or(OUT_OF_DATE)?;
-        let plan = Plan::build(&session.results, choices, policy);
+        let plan = Plan::build(&session.results, choices, policy, running);
         let plan_id = self.last_plan_id.fetch_add(1, Ordering::Relaxed) + 1;
         let view = PlanView {
             plan_id,
@@ -431,6 +432,7 @@ mod tests {
             scan_id,
             &HashMap::new(),
             &Policy::default(),
+            &RunningPrograms::default(),
             Mode::DryRun,
             now,
         )

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
-use oj_core::{CleanProgress, CleanReport, Cleaner, History, NodeId, Policy};
+use oj_core::{CleanProgress, CleanReport, Cleaner, History, NodeId, Policy, RunningPrograms};
 use oj_safety::{DenyList, Executor, Mode, Store, SystemPaths};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -22,8 +22,10 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_CHOICES: usize = 100_000;
 
 /// Builds the cleanup plan for a selection of scan `scan_id`'s results:
-/// what will be deleted, what will be quarantined, and what's left out.
-/// Changes nothing.
+/// what will be deleted, what will be quarantined, and what's left out
+/// (including the caches of apps that are open right now). Changes
+/// nothing. Calling it again after closing an app is how "Check again"
+/// works.
 #[tauri::command]
 pub fn plan_clean(
     state: State<'_, AppState>,
@@ -34,13 +36,21 @@ pub fn plan_clean(
         return Err("The selection is too large.".into());
     }
     let choices: HashMap<NodeId, bool> = choices.into_iter().collect();
+    let running = running_programs()?;
     state.plan_clean(
         scan_id,
         &choices,
         &Policy::default(),
+        &running,
         Mode::from_env(),
         SystemTime::now(),
     )
+}
+
+/// What's running now. Without it, OpenJanitor can't tell whether an app
+/// is open, so it refuses instead of guessing.
+fn running_programs() -> Result<RunningPrograms, String> {
+    RunningPrograms::now().map_err(|e| format!("Couldn't check which apps are open: {e}"))
 }
 
 /// Runs cleanup plan `plan_id`, sending progress on `on_progress`.
@@ -80,6 +90,7 @@ fn clean(
     let protected = crate::protected::load(&system.protected_list_path())?;
     let mut history = History::open(&system.history_path())
         .map_err(|e| format!("Couldn't open the history file: {e}. {unchanged}"))?;
+    let running = running_programs().map_err(|e| format!("{e}. {unchanged}"))?;
     let executor = Executor::new(Mode::from_env(), &deny).with_protected_list(protected);
     let store = Store::new(system.personal_quarantine());
 
@@ -99,6 +110,7 @@ fn clean(
         executor: &executor,
         store: &store,
         history: &mut history,
+        running: &running,
     }
     .run(
         &results,

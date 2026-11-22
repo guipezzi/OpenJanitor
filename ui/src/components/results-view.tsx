@@ -79,14 +79,16 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
     }
   }
 
-  // The Rust side resolves the choices against the full results; the
-  // dialog shows its numbers, not the footer's.
+  // The Rust side resolves the choices against the full results, and checks
+  // which apps are open; the dialog shows its numbers, not the footer's.
+  // "Check again" in the dialog calls this too.
   async function review() {
     setPlanError(null)
     setPlanning(true)
     try {
       setPlan(await planClean(overview.scan_id, choices))
     } catch (cause) {
+      setPlan(null)
       setPlanError(t('clean.planError', { error: String(cause) }))
     } finally {
       setPlanning(false)
@@ -181,6 +183,8 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
         onCancel={() => setPlan(null)}
         onConfirm={onClean}
         onScanAgain={onScanAgain}
+        onRecheck={() => void review()}
+        rechecking={planning}
       />
     </div>
   )

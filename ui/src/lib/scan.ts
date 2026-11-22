@@ -16,6 +16,13 @@ export interface WalkStats {
   unreadable_samples: string[]
 }
 
+/** The program a rule cleans up after, such as a browser (oj_core::App). */
+export interface App {
+  name: string
+  /** Program file names, such as "chrome.exe". */
+  processes: string[]
+}
+
 /** What one rule found (oj_core::RuleReport). */
 export interface RuleReport {
   rule_id: string
@@ -27,6 +34,8 @@ export interface RuleReport {
   /** Whether "Select recommended" may pick it (only if it's also low risk). */
   recommended: boolean
   needs_admin: boolean
+  /** While this app runs, the rule's files are left out of cleanups. */
+  app?: App
   status: RuleStatus
   roots: string[]
   findings: number
