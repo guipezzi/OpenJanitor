@@ -2,6 +2,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 
@@ -49,6 +51,26 @@ impl WalkStats {
     }
 }
 
+/// Lets another thread stop a running walk, for example when the user
+/// cancels a scan. Clones share the same flag.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Asks every walk using this token to stop as soon as possible.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
 /// Walks `root` and calls `on_file` for every regular file the deny list
 /// allows.
 ///
@@ -56,9 +78,12 @@ impl WalkStats {
 /// - Cloud placeholders are skipped entirely.
 /// - Folders the deny list fully protects are skipped without being read.
 /// - Only metadata is read; file contents are never opened.
+/// - Once `cancel` is cancelled, the walk stops before the next folder or
+///   file and returns what it saw so far.
 pub fn walk_files(
     root: &Path,
     deny: &DenyList,
+    cancel: &CancelToken,
     mut on_file: impl FnMut(FileSnapshot),
 ) -> WalkStats {
     let mut stats = WalkStats::default();
@@ -88,6 +113,9 @@ pub fn walk_files(
 
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
+        if cancel.is_cancelled() {
+            break;
+        }
         if deny.denies_subtree(&dir) {
             stats.skipped_protected += 1;
             continue;
@@ -101,6 +129,9 @@ pub fn walk_files(
             }
         };
         for entry in entries {
+            if cancel.is_cancelled() {
+                break;
+            }
             let Ok(entry) = entry else {
                 stats.note_unreadable(&dir);
                 continue;

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use oj_safety::{DenyList, FileSnapshot, NormPath, WalkStats, walk_files};
+use oj_safety::{CancelToken, DenyList, FileSnapshot, NormPath, WalkStats, walk_files};
 use serde::Serialize;
 
 use crate::age::{DEFAULT_MIN_AGE, describe};
@@ -39,6 +39,8 @@ pub struct Finding {
     pub category: String,
     pub risk: Risk,
     pub path: PathBuf,
+    /// The rule location the file was found under.
+    pub root: PathBuf,
     /// Bytes freed by deleting it (0 for files with other hard links).
     pub size_on_disk: u64,
     pub file_count: u64,
@@ -91,7 +93,28 @@ pub struct ScanReport {
     pub size_on_disk_total: u64,
     pub rules: Vec<RuleReport>,
     pub findings: Vec<Finding>,
+    /// The scan was cancelled, so the report is incomplete.
+    pub cancelled: bool,
 }
+
+/// Where a running scan is, for progress displays.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanProgress {
+    /// Position of the rule being scanned, counting from 0.
+    pub rule_index: usize,
+    pub rule_count: usize,
+    pub rule_id: String,
+    pub rule_name: String,
+    /// Files looked at so far, in all rules.
+    pub files_checked: u64,
+    /// Files found so far, and the space they take.
+    pub findings: u64,
+    pub size_on_disk: u64,
+}
+
+/// A scan reports progress when each rule starts and then every this many
+/// files.
+const PROGRESS_EVERY: u64 = 256;
 
 /// Runs rules. Never modifies anything.
 pub struct Scanner<'a> {
@@ -102,22 +125,49 @@ pub struct Scanner<'a> {
 
 impl Scanner<'_> {
     pub fn scan(&self, options: &ScanOptions) -> ScanReport {
-        let mut state = State {
-            seen: HashSet::new(),
-            findings: Vec::new(),
-        };
-        let rules = self
+        self.scan_with(options, &CancelToken::new(), &mut |_| {})
+    }
+
+    /// Like [`scan`](Self::scan), but calls `on_progress` along the way and
+    /// stops early once `cancel` is cancelled. The report of a cancelled
+    /// scan is incomplete and has `cancelled` set.
+    pub fn scan_with(
+        &self,
+        options: &ScanOptions,
+        cancel: &CancelToken,
+        on_progress: &mut dyn FnMut(&ScanProgress),
+    ) -> ScanReport {
+        let selected: Vec<&CompiledRule> = self
             .rules
             .iter()
             .filter(|compiled| options.level.includes(compiled.rule.level))
-            .map(|compiled| self.scan_rule(compiled, options, &mut state))
-            .collect::<Vec<_>>();
+            .collect();
+        let mut state = State {
+            seen: HashSet::new(),
+            findings: Vec::new(),
+            files_checked: 0,
+            size_on_disk: 0,
+        };
+        let mut rules = Vec::with_capacity(selected.len());
+        for (index, compiled) in selected.iter().enumerate() {
+            if cancel.is_cancelled() {
+                break;
+            }
+            let mut progress = Progress {
+                rule_index: index,
+                rule_count: selected.len(),
+                compiled,
+                on_progress: &mut *on_progress,
+            };
+            rules.push(self.scan_rule(compiled, options, &mut state, cancel, &mut progress));
+        }
         ScanReport {
             level: options.level,
             findings_total: state.findings.len() as u64,
-            size_on_disk_total: state.findings.iter().map(|f| f.size_on_disk).sum(),
+            size_on_disk_total: state.size_on_disk,
             rules,
             findings: state.findings,
+            cancelled: cancel.is_cancelled(),
         }
     }
 
@@ -126,7 +176,10 @@ impl Scanner<'_> {
         compiled: &CompiledRule,
         options: &ScanOptions,
         state: &mut State,
+        cancel: &CancelToken,
+        progress: &mut Progress,
     ) -> RuleReport {
+        progress.report(state);
         let rule = &compiled.rule;
         let mut report = RuleReport {
             rule_id: rule.id.clone(),
@@ -178,7 +231,11 @@ impl Scanner<'_> {
             .unwrap_or(DEFAULT_MIN_AGE);
 
         for root in report.roots.clone() {
-            let stats = walk_files(&root, self.deny, |snapshot| {
+            let stats = walk_files(&root, self.deny, cancel, |snapshot| {
+                state.files_checked += 1;
+                if state.files_checked.is_multiple_of(PROGRESS_EVERY) {
+                    progress.report(state);
+                }
                 let Some(relative) = relative_path(&root, &snapshot.path) else {
                     return;
                 };
@@ -204,6 +261,7 @@ impl Scanner<'_> {
                 );
                 report.findings += 1;
                 report.size_on_disk += finding.size_on_disk;
+                state.size_on_disk += finding.size_on_disk;
                 state.findings.push(finding);
             });
             report.walk.merge(stats);
@@ -215,6 +273,30 @@ impl Scanner<'_> {
 struct State {
     seen: HashSet<String>,
     findings: Vec<Finding>,
+    files_checked: u64,
+    size_on_disk: u64,
+}
+
+/// Sends progress for the rule being scanned.
+struct Progress<'a> {
+    rule_index: usize,
+    rule_count: usize,
+    compiled: &'a CompiledRule,
+    on_progress: &'a mut dyn FnMut(&ScanProgress),
+}
+
+impl Progress<'_> {
+    fn report(&mut self, state: &State) {
+        (self.on_progress)(&ScanProgress {
+            rule_index: self.rule_index,
+            rule_count: self.rule_count,
+            rule_id: self.compiled.rule.id.clone(),
+            rule_name: self.compiled.rule.name.clone(),
+            files_checked: state.files_checked,
+            findings: state.findings.len() as u64,
+            size_on_disk: state.size_on_disk,
+        });
+    }
 }
 
 fn make_finding(
@@ -241,6 +323,7 @@ fn make_finding(
         category: rule.category.clone(),
         risk: rule.risk,
         path: snapshot.path.clone(),
+        root: root.to_path_buf(),
         size_on_disk: snapshot.reclaimable(),
         file_count: 1,
         last_modified: snapshot

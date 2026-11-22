@@ -8,10 +8,16 @@
 #![forbid(unsafe_code)]
 
 mod commands;
+mod state;
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![commands::scan])
+        .manage(state::AppState::default())
+        .invoke_handler(tauri::generate_handler![
+            commands::scan,
+            commands::cancel_scan,
+            commands::scan_children,
+        ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenJanitor");
 }

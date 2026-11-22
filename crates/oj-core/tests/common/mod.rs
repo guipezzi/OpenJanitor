@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
-use oj_core::{Level, RuleSet, ScanOptions, ScanReport, Scanner};
+use oj_core::{CancelToken, Level, RuleSet, ScanOptions, ScanProgress, ScanReport, Scanner};
 use oj_safety::{DenyList, SystemPaths};
 use tempfile::TempDir;
 
@@ -49,13 +49,22 @@ impl FakeMachine {
     }
 
     pub fn scan(&self, rules: &RuleSet) -> ScanReport {
+        self.scan_with(rules, &CancelToken::new(), &mut |_| {})
+    }
+
+    pub fn scan_with(
+        &self,
+        rules: &RuleSet,
+        cancel: &CancelToken,
+        on_progress: &mut dyn FnMut(&ScanProgress),
+    ) -> ScanReport {
         let deny = DenyList::new(&self.system).unwrap();
         let scanner = Scanner {
             rules,
             vars: &self.vars,
             deny: &deny,
         };
-        scanner.scan(&ScanOptions::new(Level::Advanced))
+        scanner.scan_with(&ScanOptions::new(Level::Advanced), cancel, on_progress)
     }
 
     /// Paths found for one rule, sorted.

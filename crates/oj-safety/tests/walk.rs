@@ -3,7 +3,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::{junction, temp_root, write_file};
-use oj_safety::{DenyList, SystemPaths, walk_files};
+use oj_safety::{CancelToken, DenyList, SystemPaths, walk_files};
 
 /// A deny list whose protected folders live in a separate fake layout, so
 /// nothing under the walk root is protected unless a test puts it there.
@@ -13,9 +13,42 @@ fn unrelated_deny(root: &std::path::Path) -> DenyList {
 
 fn walk(root: &std::path::Path, deny: &DenyList) -> (Vec<PathBuf>, oj_safety::WalkStats) {
     let mut found = Vec::new();
-    let stats = walk_files(root, deny, |snapshot| found.push(snapshot.path));
+    let stats = walk_files(root, deny, &CancelToken::new(), |snapshot| {
+        found.push(snapshot.path)
+    });
     found.sort();
     (found, stats)
+}
+
+#[test]
+fn a_cancelled_walk_reads_nothing() {
+    let (_dir, root) = temp_root();
+    let target = root.join("target");
+    write_file(&target.join(r"sub\a.txt"), 10);
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    let mut found = 0;
+    let stats = walk_files(&target, &unrelated_deny(&root), &cancel, |_| found += 1);
+    assert_eq!(found, 0);
+    assert_eq!(stats.directories, 0);
+}
+
+#[test]
+fn cancelling_mid_walk_stops_at_the_next_file() {
+    let (_dir, root) = temp_root();
+    let target = root.join("target");
+    for name in ["a.txt", "b.txt", "c.txt", r"sub\d.txt", r"sub\e.txt"] {
+        write_file(&target.join(name), 10);
+    }
+    let cancel = CancelToken::new();
+
+    let mut found = 0;
+    walk_files(&target, &unrelated_deny(&root), &cancel, |_| {
+        found += 1;
+        cancel.cancel();
+    });
+    assert_eq!(found, 1);
 }
 
 #[test]
