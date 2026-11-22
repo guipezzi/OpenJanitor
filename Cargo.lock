@@ -2429,6 +2429,7 @@ dependencies = [
  "oj-safety",
  "oj-windows",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "toml 1.2.2+spec-1.1.0",

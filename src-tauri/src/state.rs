@@ -1,18 +1,25 @@
 //! What the app remembers between commands: the results of the last scan,
-//! and the scan that's running, if any.
+//! the cleanup plan made from them, and the operation that's running, if
+//! any.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_core::{
-    CancelToken, ChildPage, Level, NodeId, NodeKind, NodeView, RuleReport, ScanReport, ScanResults,
+    CancelToken, ChildPage, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy,
+    RuleReport, ScanReport, ScanResults,
 };
-use oj_safety::{Entry, EntryKind, ProtectedList};
+use oj_safety::{Entry, EntryKind, Mode, ProtectedList};
 use serde::Serialize;
 
 /// The most children one request can fetch.
 pub const MAX_PAGE: usize = 500;
+
+/// Results older than this get a "scan again" suggestion before cleaning.
+pub const STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// What the UI gets after a completed scan.
 #[derive(Debug, Serialize)]
@@ -35,16 +42,47 @@ pub enum ScanOutcome {
     Cancelled,
 }
 
+/// What the confirmation shows: a cleanup plan in totals.
+#[derive(Debug, Serialize)]
+pub struct PlanView {
+    /// Running the cleanup quotes it, so exactly this plan runs.
+    pub plan_id: u64,
+    pub mode: Mode,
+    #[serde(flatten)]
+    pub summary: PlanSummary,
+    /// When the scan finished, in seconds since the Unix epoch.
+    pub scanned_at: u64,
+    /// The results are old enough that scanning again first is worth it.
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Scan,
+    Clean,
+}
+
+#[derive(Debug)]
+struct Running {
+    operation: Operation,
+    cancel: CancelToken,
+}
+
 #[derive(Debug)]
 struct Session {
     id: u64,
     results: ScanResults,
+    scanned_at: SystemTime,
+    /// The latest plan made from these results, with its id.
+    plan: Option<(u64, Plan)>,
 }
 
 #[derive(Debug, Default)]
 pub struct AppState {
     last_scan_id: AtomicU64,
-    running: Mutex<Option<CancelToken>>,
+    last_plan_id: AtomicU64,
+    /// One scan or cleanup at a time.
+    running: Mutex<Option<Running>>,
     session: Mutex<Option<Session>>,
     /// Held while reading, changing, and saving the Protected list, so two
     /// changes can't overwrite each other.
@@ -70,23 +108,24 @@ fn overview(id: u64, results: &ScanResults) -> ScanOverview {
 
 impl AppState {
     /// Starts a scan: forgets the previous results and returns the token
-    /// that cancels this one. Fails if a scan is already running.
+    /// that cancels this one. Fails if a scan or a cleanup is running.
     pub fn begin_scan(&self) -> Result<CancelToken, String> {
         let mut running = lock(&self.running);
-        if running.is_some() {
-            return Err("A scan is already running.".into());
+        if let Some(busy) = running.as_ref() {
+            return Err(busy_message(busy.operation));
         }
         *lock(&self.session) = None;
         let cancel = CancelToken::new();
-        *running = Some(cancel.clone());
+        *running = Some(Running {
+            operation: Operation::Scan,
+            cancel: cancel.clone(),
+        });
         Ok(cancel)
     }
 
     /// Asks the running scan, if any, to stop.
     pub fn cancel_scan(&self) {
-        if let Some(cancel) = lock(&self.running).as_ref() {
-            cancel.cancel();
-        }
+        self.cancel(Operation::Scan);
     }
 
     /// Records how a scan ended. Call it exactly once after each
@@ -98,13 +137,104 @@ impl AppState {
                 let id = self.last_scan_id.fetch_add(1, Ordering::Relaxed) + 1;
                 let results = ScanResults::new(report);
                 let overview = overview(id, &results);
-                *lock(&self.session) = Some(Session { id, results });
+                *lock(&self.session) = Some(Session {
+                    id,
+                    results,
+                    scanned_at: SystemTime::now(),
+                    plan: None,
+                });
                 Ok(ScanOutcome::Completed { overview })
             }
             Err(error) => Err(error),
         };
-        *lock(&self.running) = None;
+        self.finish(Operation::Scan);
         outcome
+    }
+
+    /// Makes the cleanup plan for a selection of scan `scan_id`'s results
+    /// and keeps it, replacing any earlier plan. Only this plan can run.
+    pub fn plan_clean(
+        &self,
+        scan_id: u64,
+        choices: &HashMap<NodeId, bool>,
+        policy: &Policy,
+        mode: Mode,
+        now: SystemTime,
+    ) -> Result<PlanView, String> {
+        let mut session = lock(&self.session);
+        let session = session
+            .as_mut()
+            .filter(|session| session.id == scan_id)
+            .ok_or(OUT_OF_DATE)?;
+        let plan = Plan::build(&session.results, choices, policy);
+        let plan_id = self.last_plan_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let view = PlanView {
+            plan_id,
+            mode,
+            summary: plan.summary().clone(),
+            scanned_at: unix_secs(session.scanned_at),
+            stale: now
+                .duration_since(session.scanned_at)
+                .is_ok_and(|age| age > STALE_AFTER),
+        };
+        session.plan = Some((plan_id, plan));
+        Ok(view)
+    }
+
+    /// Starts cleanup `plan_id`. The results it came from are handed over
+    /// and forgotten here, since cleaning makes them out of date. Fails if
+    /// the plan was replaced, if its results are gone, or if a scan or a
+    /// cleanup is running.
+    pub fn begin_clean(&self, plan_id: u64) -> Result<(ScanResults, Plan, CancelToken), String> {
+        let mut running = lock(&self.running);
+        if let Some(busy) = running.as_ref() {
+            return Err(busy_message(busy.operation));
+        }
+        let mut session = lock(&self.session);
+        let current = session
+            .as_ref()
+            .and_then(|s| s.plan.as_ref())
+            .is_some_and(|(id, _)| *id == plan_id);
+        if !current {
+            return Err("This cleanup is out of date. Review it again.".into());
+        }
+        let session = session.take().expect("checked above");
+        let (_, plan) = session.plan.expect("checked above");
+        let results = session.results;
+        let cancel = CancelToken::new();
+        *running = Some(Running {
+            operation: Operation::Clean,
+            cancel: cancel.clone(),
+        });
+        Ok((results, plan, cancel))
+    }
+
+    /// Asks the running cleanup, if any, to stop after the current file.
+    pub fn cancel_clean(&self) {
+        self.cancel(Operation::Clean);
+    }
+
+    /// Records that the cleanup ended. Call it once after each successful
+    /// [`begin_clean`](Self::begin_clean).
+    pub fn finish_clean(&self) {
+        self.finish(Operation::Clean);
+    }
+
+    fn cancel(&self, operation: Operation) {
+        if let Some(running) = lock(&self.running)
+            .as_ref()
+            .filter(|r| r.operation == operation)
+        {
+            running.cancel.cancel();
+        }
+    }
+
+    /// Frees the slot, but only for the operation that holds it.
+    fn finish(&self, operation: Operation) {
+        let mut running = lock(&self.running);
+        if running.as_ref().is_some_and(|r| r.operation == operation) {
+            *running = None;
+        }
     }
 
     /// One page of a node's children from the results of scan `scan_id`.
@@ -189,13 +319,29 @@ impl AppState {
         let session = session
             .as_ref()
             .filter(|session| session.id == scan_id)
-            .ok_or("These results are out of date. Scan again.")?;
+            .ok_or(OUT_OF_DATE)?;
         f(&session.results)
     }
 }
 
+const OUT_OF_DATE: &str = "These results are out of date. Scan again.";
+
+fn busy_message(operation: Operation) -> String {
+    match operation {
+        Operation::Scan => "A scan is already running.",
+        Operation::Clean => "A cleanup is running. Wait for it to finish.",
+    }
+    .into()
+}
+
 fn no_item(node: NodeId) -> String {
     format!("There's no item {node} in these results.")
+}
+
+fn unix_secs(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -278,6 +424,106 @@ mod tests {
                 .unwrap_err()
                 .contains("no item")
         );
+    }
+
+    fn plan(state: &AppState, scan_id: u64, now: SystemTime) -> Result<PlanView, String> {
+        state.plan_clean(
+            scan_id,
+            &HashMap::new(),
+            &Policy::default(),
+            Mode::DryRun,
+            now,
+        )
+    }
+
+    #[test]
+    fn a_plan_needs_the_current_results() {
+        let state = AppState::default();
+        assert!(
+            plan(&state, 1, SystemTime::now())
+                .unwrap_err()
+                .contains("out of date")
+        );
+
+        state.begin_scan().unwrap();
+        let id = completed_id(state.finish_scan(Ok(report(false))));
+        let first = plan(&state, id, SystemTime::now()).unwrap();
+        assert_eq!(first.mode, Mode::DryRun);
+        assert!(!first.stale);
+        let second = plan(&state, id, SystemTime::now()).unwrap();
+        assert_ne!(first.plan_id, second.plan_id);
+
+        let error = state.begin_clean(first.plan_id).unwrap_err();
+        assert!(
+            error.contains("Review it again"),
+            "a newer plan replaced it"
+        );
+        assert!(state.begin_clean(second.plan_id).is_ok());
+    }
+
+    #[test]
+    fn old_results_are_flagged() {
+        let state = AppState::default();
+        state.begin_scan().unwrap();
+        let id = completed_id(state.finish_scan(Ok(report(false))));
+        let later = SystemTime::now() + STALE_AFTER + Duration::from_secs(1);
+        assert!(plan(&state, id, later).unwrap().stale);
+    }
+
+    #[test]
+    fn a_cleanup_takes_the_results_and_blocks_scans() {
+        let state = AppState::default();
+        state.begin_scan().unwrap();
+        let id = completed_id(state.finish_scan(Ok(report(false))));
+        let view = plan(&state, id, SystemTime::now()).unwrap();
+
+        let (_results, _plan, cancel) = state.begin_clean(view.plan_id).unwrap();
+        assert!(state.begin_clean(view.plan_id).is_err(), "a plan runs once");
+        assert!(
+            state
+                .begin_scan()
+                .unwrap_err()
+                .contains("cleanup is running")
+        );
+        assert!(
+            state
+                .children(id, 0, 0, 10)
+                .unwrap_err()
+                .contains("out of date")
+        );
+
+        state.cancel_scan();
+        assert!(
+            !cancel.is_cancelled(),
+            "only a cleanup's own cancel reaches it"
+        );
+        state.cancel_clean();
+        assert!(cancel.is_cancelled());
+
+        state.finish_scan(Err("not mine".into())).unwrap_err();
+        assert!(
+            state.begin_scan().is_err(),
+            "a scan can't free the cleanup's slot"
+        );
+        state.finish_clean();
+        assert!(state.begin_scan().is_ok());
+    }
+
+    #[test]
+    fn a_cleanup_waits_for_the_scan() {
+        let state = AppState::default();
+        state.begin_scan().unwrap();
+        let id = completed_id(state.finish_scan(Ok(report(false))));
+        let view = plan(&state, id, SystemTime::now()).unwrap();
+        state.begin_scan().unwrap();
+        assert!(
+            state
+                .begin_clean(view.plan_id)
+                .unwrap_err()
+                .contains("scan is already running")
+        );
+        state.finish_clean();
+        assert!(state.begin_scan().is_err(), "the scan still holds the slot");
     }
 
     #[test]

@@ -3,6 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import {
+  cancelClean,
+  planClean,
+  runClean,
+  type CleanPlan,
+  type CleanProgress,
+  type CleanReport,
+} from './lib/clean'
+import {
   protectedEntries,
   protectItem,
   protectPattern,
@@ -28,6 +36,13 @@ vi.mock('./lib/protected', () => ({
   unprotect: vi.fn(),
   exportProtected: vi.fn(),
   importProtected: vi.fn(),
+}))
+
+vi.mock('./lib/clean', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/clean')>()),
+  planClean: vi.fn(),
+  runClean: vi.fn(),
+  cancelClean: vi.fn(() => Promise.resolve()),
 }))
 
 vi.mock('./lib/scan', async (importOriginal) => ({
@@ -155,6 +170,37 @@ async function scanned() {
 /** The selection summary at the bottom. */
 const footer = () => screen.getByText(/files? selected ·/)
 
+const plan: CleanPlan = {
+  plan_id: 7,
+  mode: 'live',
+  delete: { files: 1100, size: 200_000_000 },
+  quarantine: [{ days: 7, files: 10, size: 1_048_576 }],
+  needs_admin: { files: 47, size: 8_037_478 },
+  scanned_at: Math.floor(Date.now() / 1000),
+  stale: false,
+}
+
+const cleaned: CleanReport = {
+  mode: 'live',
+  cancelled: false,
+  deleted: { files: 1097, size: 199_000_000 },
+  quarantined: [{ days: 7, files: 10, size: 1_048_576, expires_at: 1_764_345_600 }],
+  batch: '20251121-160000',
+  skipped: [{ reason: 'in_use', files: 3 }],
+  not_started: 0,
+  folders_removed: 4,
+  needs_admin: { files: 47, size: 8_037_478 },
+}
+
+/** Scans, selects the recommended items, and opens the confirmation. */
+async function reviewing(withPlan: CleanPlan) {
+  vi.mocked(planClean).mockResolvedValue(withPlan)
+  await scanned()
+  fireEvent.click(screen.getByRole('button', { name: 'Select recommended' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Clean…' }))
+  return screen.findByRole('alertdialog', { name: 'Review this cleanup' })
+}
+
 describe('App', () => {
   beforeEach(() => {
     vi.mocked(canScan).mockReturnValue(true)
@@ -163,6 +209,159 @@ describe('App', () => {
     vi.mocked(revealInExplorer).mockClear()
     vi.mocked(scanChildren).mockReset()
     vi.mocked(scanChildren).mockResolvedValue({ items: [setupFolder, oldFile], total: 2 })
+    vi.mocked(planClean).mockReset()
+    vi.mocked(runClean).mockReset()
+    vi.mocked(cancelClean).mockClear()
+  })
+
+  it('reviews a cleanup, then runs exactly that plan', async () => {
+    const dialog = await reviewing(plan)
+
+    expect(planClean).toHaveBeenCalledWith(
+      1,
+      new Map([
+        [2, true],
+        [3, true],
+      ]),
+    )
+    expect(within(dialog).getByText('Deleted permanently')).toBeInTheDocument()
+    expect(within(dialog).getByText('· 1,100 files · 190.7 MB')).toBeInTheDocument()
+    expect(within(dialog).getByText('Moved to quarantine for 7 days')).toBeInTheDocument()
+    expect(within(dialog).getByText('· 10 files · 1.0 MB')).toBeInTheDocument()
+    expect(within(dialog).getByText('Left out')).toBeInTheDocument()
+    expect(within(dialog).getByText(/need administrator rights/)).toBeInTheDocument()
+    expect(within(dialog).queryByText(/Test mode/)).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(/These results are from/)).not.toBeInTheDocument()
+
+    // Nothing runs until the box is ticked.
+    const confirm = within(dialog).getByRole('button', { name: 'Delete and quarantine' })
+    expect(confirm).toBeDisabled()
+    fireEvent.click(
+      within(dialog).getByRole('checkbox', {
+        name: 'I understand that 1,100 files will be permanently deleted.',
+      }),
+    )
+    expect(confirm).toBeEnabled()
+
+    vi.mocked(runClean).mockResolvedValue(cleaned)
+    fireEvent.click(confirm)
+
+    const summary = await screen.findByRole('region', { name: 'Cleanup finished' })
+    expect(runClean).toHaveBeenCalledWith(7, expect.any(Function))
+    expect(within(summary).getByText('189.8 MB')).toBeInTheDocument()
+    expect(within(summary).getByText('freed now')).toBeInTheDocument()
+    expect(within(summary).getByText('1,097 files deleted permanently')).toBeInTheDocument()
+    expect(
+      within(summary).getByText(/10 files in quarantine \(1\.0 MB\), restorable until Nov 2[89], 2025/),
+    ).toBeInTheDocument()
+    expect(within(summary).getByText('Removed 4 folders the cleanup left empty.')).toBeInTheDocument()
+    expect(within(summary).getByText('3 files were left alone')).toBeInTheDocument()
+    expect(within(summary).getByText('In use by another program: 3')).toBeInTheDocument()
+    expect(within(summary).getByText(/Close the programs using them/)).toBeInTheDocument()
+    expect(
+      within(summary).getByText('47 files that need administrator rights were left out.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('tree')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan again' })).toBeEnabled()
+  })
+
+  it('needs no extra tick when everything goes to quarantine, and can be cancelled', async () => {
+    const dialog = await reviewing({ ...plan, delete: { files: 0, size: 0 } })
+
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Move to quarantine' })).toBeEnabled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(runClean).not.toHaveBeenCalled()
+    expect(footer()).toHaveTextContent('1,147 files selected')
+  })
+
+  it('suggests scanning again when the results are old', async () => {
+    const twoHoursAgo = Math.floor(Date.now() / 1000) - 2 * 3600
+    const dialog = await reviewing({ ...plan, scanned_at: twoHoursAgo, stale: true })
+
+    expect(within(dialog).getByText('These results are from 2 hours ago')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Scan again' }))
+
+    await waitFor(() => expect(scan).toHaveBeenCalledTimes(2))
+    expect(runClean).not.toHaveBeenCalled()
+  })
+
+  it("says when it's only a test run", async () => {
+    const dialog = await reviewing({ ...plan, mode: 'dry_run' })
+    expect(within(dialog).getByText(/Test mode: nothing will be deleted or moved/)).toBeInTheDocument()
+
+    vi.mocked(runClean).mockResolvedValue({ ...cleaned, mode: 'dry_run', batch: undefined })
+    fireEvent.click(within(dialog).getByRole('checkbox'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete and quarantine' }))
+
+    const summary = await screen.findByRole('region', { name: 'Test run finished' })
+    expect(within(summary).getByText('would be freed')).toBeInTheDocument()
+    expect(within(summary).getByText('1,097 files would be deleted permanently')).toBeInTheDocument()
+    expect(within(summary).getByText(/Test mode: nothing was deleted or moved/)).toBeInTheDocument()
+  })
+
+  it('shows progress while cleaning and can stop', async () => {
+    let finish: (report: CleanReport) => void = () => {}
+    vi.mocked(runClean).mockImplementation((_planId, onProgress: (p: CleanProgress) => void) => {
+      onProgress({ done: 1, total: 3, freed: 1_048_576 })
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    const dialog = await reviewing({ ...plan, quarantine: [] })
+    fireEvent.click(within(dialog).getByRole('checkbox'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete permanently' }))
+
+    expect(await screen.findByText('Cleaning…')).toBeInTheDocument()
+    expect(screen.getByText('1 of 3 files')).toBeInTheDocument()
+    expect(screen.getByText('Freed so far: 1.0 MB')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan again' })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(cancelClean).toHaveBeenCalled()
+    expect(await screen.findByRole('button', { name: 'Stopping…' })).toBeDisabled()
+
+    await act(async () =>
+      finish({
+        ...cleaned,
+        cancelled: true,
+        deleted: { files: 1, size: 1_048_576 },
+        quarantined: [],
+        skipped: [],
+        not_started: 2,
+      }),
+    )
+    const summary = screen.getByRole('region', { name: 'Cleanup stopped' })
+    expect(
+      within(summary).getByText("2 files weren't touched, because you stopped the cleanup."),
+    ).toBeInTheDocument()
+  })
+
+  it('shows why a cleanup could not be prepared or run', async () => {
+    vi.mocked(planClean).mockRejectedValue('Your Protected list could not be read')
+    await scanned()
+    fireEvent.click(screen.getByRole('button', { name: 'Select recommended' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clean…' }))
+    expect(
+      await screen.findByText("Couldn't prepare the cleanup: Your Protected list could not be read"),
+    ).toBeInTheDocument()
+
+    vi.mocked(planClean).mockResolvedValue({ ...plan, quarantine: [] })
+    vi.mocked(runClean).mockRejectedValue('This cleanup is out of date. Review it again.')
+    fireEvent.click(screen.getByRole('button', { name: 'Clean…' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('checkbox'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete permanently' }))
+
+    expect(await screen.findByText("The cleanup couldn't run")).toBeInTheDocument()
+    expect(screen.getByText('This cleanup is out of date. Review it again.')).toBeInTheDocument()
+  })
+
+  it('keeps the Clean button off while nothing is selected', async () => {
+    await scanned()
+    expect(screen.getByRole('button', { name: 'Clean…' })).toBeDisabled()
   })
 
   it('starts idle and promises not to delete anything', () => {

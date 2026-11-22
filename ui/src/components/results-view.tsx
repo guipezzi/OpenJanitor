@@ -1,10 +1,12 @@
-import { ListChecks, Shield, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { BrushCleaning, ListChecks, Shield, ShieldAlert, TriangleAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { CleanDialog } from '@/components/clean-dialog'
 import { DetailsPanel } from '@/components/details-panel'
 import { ResultsTree } from '@/components/results-tree'
 import { Button } from '@/components/ui/button'
+import { planClean, type CleanPlan } from '@/lib/clean'
 import { formatBytes } from '@/lib/format'
 import { useNodeLabel } from '@/lib/labels'
 import { protectItem } from '@/lib/protected'
@@ -16,14 +18,18 @@ interface ResultsViewProps {
   overview: ScanOverview
   /** The results changed (something was protected). Same scan, same node ids. */
   onOverviewChange: (overview: ScanOverview) => void
+  /** The user confirmed this cleanup. */
+  onClean: (plan: CleanPlan) => void
+  onScanAgain: () => void
 }
 
 /**
- * The results of one scan: the tree, the details panel, and what's
- * selected. Mount it with `key={overview.scan_id}`; a new overview for the
- * same scan (after protecting something) keeps the selection.
+ * The results of one scan: the tree, the details panel, what's selected,
+ * and the Clean button. Mount it with `key={overview.scan_id}`; a new
+ * overview for the same scan (after protecting something) keeps the
+ * selection.
  */
-export function ResultsView({ overview, onOverviewChange }: ResultsViewProps) {
+export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }: ResultsViewProps) {
   const { t, i18n } = useTranslation()
   const locale = i18n.language
   const label = useNodeLabel()
@@ -32,6 +38,9 @@ export function ResultsView({ overview, onOverviewChange }: ResultsViewProps) {
   const [focused, setFocused] = useState<NodeView | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [protectError, setProtectError] = useState<string | null>(null)
+  const [plan, setPlan] = useState<CleanPlan | null>(null)
+  const [planning, setPlanning] = useState(false)
+  const [planError, setPlanError] = useState<string | null>(null)
 
   // The focused item may be gone once the results change.
   const [shown, setShown] = useState(overview)
@@ -67,6 +76,20 @@ export function ResultsView({ overview, onOverviewChange }: ResultsViewProps) {
       if (update.overview) onOverviewChange(update.overview)
     } catch (cause) {
       setProtectError(t('results.protectError', { error: String(cause) }))
+    }
+  }
+
+  // The Rust side resolves the choices against the full results; the
+  // dialog shows its numbers, not the footer's.
+  async function review() {
+    setPlanError(null)
+    setPlanning(true)
+    try {
+      setPlan(await planClean(overview.scan_id, choices))
+    } catch (cause) {
+      setPlanError(t('clean.planError', { error: String(cause) }))
+    } finally {
+      setPlanning(false)
     }
   }
 
@@ -142,8 +165,23 @@ export function ResultsView({ overview, onOverviewChange }: ResultsViewProps) {
             ? t('results.selected', { count: total.files, size: formatBytes(total.size, locale) })
             : t('results.nothingSelected')}
         </p>
-        <p className="ml-auto text-xs text-muted-foreground">{t('results.cleaningLater')}</p>
+        {planError && (
+          <p className="text-sm text-destructive" role="alert">
+            {planError}
+          </p>
+        )}
+        <Button className="ml-auto" onClick={review} disabled={total.files === 0 || planning}>
+          <BrushCleaning />
+          {t('clean.button')}
+        </Button>
       </div>
+
+      <CleanDialog
+        plan={plan}
+        onCancel={() => setPlan(null)}
+        onConfirm={onClean}
+        onScanAgain={onScanAgain}
+      />
     </div>
   )
 }

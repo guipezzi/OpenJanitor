@@ -66,7 +66,7 @@ pub enum Outcome {
     },
 }
 
-/// Why a file was left alone.
+/// Why a file or folder was left alone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum SkipReason {
@@ -78,7 +78,8 @@ pub enum SkipReason {
     Missing,
     /// Its size or modified time changed since the scan.
     Changed,
-    /// It's no longer a regular file (for example, it became a junction).
+    /// It's no longer a plain file or folder (for example, it became a
+    /// junction).
     NotARegularFile(EntryClass),
     /// Another program has it open.
     InUse,
@@ -90,7 +91,33 @@ pub enum SkipReason {
     Conflict,
     /// The quarantine item was already restored, purged, or never moved in.
     NotInQuarantine,
+    /// The folder still has something in it.
+    NotEmpty,
+    /// The folder isn't inside the rule location it was found in, or it's
+    /// that location itself.
+    OutsideLocation,
     Failed(String),
+}
+
+impl SkipReason {
+    /// A short, stable name for the reason, for counting and for the UI.
+    pub fn key(&self) -> &'static str {
+        match self {
+            SkipReason::Denied(_) => "denied",
+            SkipReason::Protected => "protected",
+            SkipReason::Missing => "missing",
+            SkipReason::Changed => "changed",
+            SkipReason::NotARegularFile(_) => "not_a_regular_file",
+            SkipReason::InUse => "in_use",
+            SkipReason::AccessDenied => "access_denied",
+            SkipReason::OtherDrive => "other_drive",
+            SkipReason::Conflict => "conflict",
+            SkipReason::NotInQuarantine => "not_in_quarantine",
+            SkipReason::NotEmpty => "not_empty",
+            SkipReason::OutsideLocation => "outside_location",
+            SkipReason::Failed(_) => "failed",
+        }
+    }
 }
 
 /// Performs file operations after revalidating every target.
@@ -187,6 +214,50 @@ impl<'a> Executor<'a> {
             },
         }
     }
+
+    /// Removes `folder` if it's empty and lies inside `location`, the rule
+    /// location its files were found in (PLANNING.md §4.4). The location
+    /// itself is never removed, and neither is anything denied, protected,
+    /// or no longer a plain folder. In dry-run mode, reports what would
+    /// happen.
+    ///
+    /// Windows only removes a folder that is empty at that moment, so a
+    /// file created meanwhile keeps it.
+    pub fn remove_empty_folder(&self, folder: &Path, location: &Path) -> Outcome {
+        if let Err(reason) = self.check_folder(folder, location) {
+            return Outcome::Skipped { reason };
+        }
+        if self.mode == Mode::DryRun {
+            return Outcome::WouldDelete { freed: 0 };
+        }
+        match fs::remove_dir(folder) {
+            Ok(()) => Outcome::Deleted { freed: 0 },
+            Err(e) if e.kind() == io::ErrorKind::DirectoryNotEmpty => Outcome::Skipped {
+                reason: SkipReason::NotEmpty,
+            },
+            Err(e) => Outcome::Skipped {
+                reason: skip_reason_for(&e),
+            },
+        }
+    }
+
+    fn check_folder(&self, folder: &Path, location: &Path) -> Result<(), SkipReason> {
+        let invalid = |e| SkipReason::Denied(DenyReason::InvalidPath(e));
+        let path = NormPath::new(folder).map_err(invalid)?;
+        let location = NormPath::new(location).map_err(invalid)?;
+        if !path.starts_with(&location) || path.depth() == location.depth() {
+            return Err(SkipReason::OutsideLocation);
+        }
+        self.deny.check_norm(&path).map_err(SkipReason::Denied)?;
+        if self.protected.covers_norm(&path) {
+            return Err(SkipReason::Protected);
+        }
+        let metadata = fs::symlink_metadata(folder).map_err(|e| skip_reason_for(&e))?;
+        match classify_metadata(&metadata) {
+            EntryClass::Directory => Ok(()),
+            other => Err(SkipReason::NotARegularFile(other)),
+        }
+    }
 }
 
 pub(crate) fn skip_reason_for(error: &io::Error) -> SkipReason {
@@ -215,5 +286,28 @@ mod tests {
         assert_eq!(reason(17), SkipReason::OtherDrive);
         assert_eq!(reason(32), SkipReason::InUse);
         assert_eq!(reason(183), SkipReason::Conflict);
+    }
+
+    #[test]
+    fn skip_reason_keys_match_their_serialized_kind() {
+        let reasons = [
+            SkipReason::Denied(DenyReason::DriveRoot),
+            SkipReason::Protected,
+            SkipReason::Missing,
+            SkipReason::Changed,
+            SkipReason::NotARegularFile(EntryClass::ReparsePoint),
+            SkipReason::InUse,
+            SkipReason::AccessDenied,
+            SkipReason::OtherDrive,
+            SkipReason::Conflict,
+            SkipReason::NotInQuarantine,
+            SkipReason::NotEmpty,
+            SkipReason::OutsideLocation,
+            SkipReason::Failed("boom".into()),
+        ];
+        for reason in reasons {
+            let json = serde_json::to_value(&reason).unwrap();
+            assert_eq!(json["kind"], reason.key(), "{reason:?}");
+        }
     }
 }

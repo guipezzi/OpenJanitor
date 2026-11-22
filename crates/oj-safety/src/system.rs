@@ -131,6 +131,12 @@ impl SystemPaths {
         self.app_data.join("protected.json")
     }
 
+    /// Where the audit log is kept, one JSON line per action
+    /// (PLANNING.md §4.8).
+    pub fn history_path(&self) -> PathBuf {
+        self.app_data.join("history.jsonl")
+    }
+
     /// Where files from this user's own folders go into quarantine
     /// (PLANNING.md §4.5).
     pub fn personal_quarantine(&self) -> PathBuf {
