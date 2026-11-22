@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use oj_core::{CancelToken, Level, RuleSet, ScanOptions, ScanProgress, ScanReport, Scanner};
-use oj_safety::{DenyList, SystemPaths};
+use oj_safety::{DenyList, ProtectedList, SystemPaths};
 use tempfile::TempDir;
 
 pub const OLD: Duration = Duration::from_secs(3 * 24 * 60 * 60);
@@ -58,11 +58,27 @@ impl FakeMachine {
         cancel: &CancelToken,
         on_progress: &mut dyn FnMut(&ScanProgress),
     ) -> ScanReport {
+        self.scan_full(rules, &ProtectedList::new(), cancel, on_progress)
+    }
+
+    /// Scans with the user's Protected list.
+    pub fn scan_protected(&self, rules: &RuleSet, protected: &ProtectedList) -> ScanReport {
+        self.scan_full(rules, protected, &CancelToken::new(), &mut |_| {})
+    }
+
+    fn scan_full(
+        &self,
+        rules: &RuleSet,
+        protected: &ProtectedList,
+        cancel: &CancelToken,
+        on_progress: &mut dyn FnMut(&ScanProgress),
+    ) -> ScanReport {
         let deny = DenyList::new(&self.system).unwrap();
         let scanner = Scanner {
             rules,
             vars: &self.vars,
             deny: &deny,
+            protected,
         };
         scanner.scan_with(&ScanOptions::new(Level::Advanced), cancel, on_progress)
     }

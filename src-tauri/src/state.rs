@@ -6,8 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use oj_core::{
-    CancelToken, ChildPage, Level, NodeId, NodeView, RuleReport, ScanReport, ScanResults,
+    CancelToken, ChildPage, Level, NodeId, NodeKind, NodeView, RuleReport, ScanReport, ScanResults,
 };
+use oj_safety::{Entry, EntryKind, ProtectedList};
 use serde::Serialize;
 
 /// The most children one request can fetch.
@@ -45,11 +46,26 @@ pub struct AppState {
     last_scan_id: AtomicU64,
     running: Mutex<Option<CancelToken>>,
     session: Mutex<Option<Session>>,
+    /// Held while reading, changing, and saving the Protected list, so two
+    /// changes can't overwrite each other.
+    protected_file: Mutex<()>,
 }
 
 /// A panic while a lock was held leaves plain data behind, so carry on.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn overview(id: u64, results: &ScanResults) -> ScanOverview {
+    let report = results.report();
+    ScanOverview {
+        scan_id: id,
+        level: report.level,
+        findings_total: report.findings_total,
+        size_on_disk_total: report.size_on_disk_total,
+        rules: report.rules.clone(),
+        categories: results.categories(),
+    }
 }
 
 impl AppState {
@@ -81,15 +97,7 @@ impl AppState {
             Ok(report) => {
                 let id = self.last_scan_id.fetch_add(1, Ordering::Relaxed) + 1;
                 let results = ScanResults::new(report);
-                let report = results.report();
-                let overview = ScanOverview {
-                    scan_id: id,
-                    level: report.level,
-                    findings_total: report.findings_total,
-                    size_on_disk_total: report.size_on_disk_total,
-                    rules: report.rules.clone(),
-                    categories: results.categories(),
-                };
+                let overview = overview(id, &results);
                 *lock(&self.session) = Some(Session { id, results });
                 Ok(ScanOutcome::Completed { overview })
             }
@@ -122,6 +130,54 @@ impl AppState {
                 .map(Path::to_path_buf)
                 .ok_or_else(|| no_item(node))
         })
+    }
+
+    /// What protecting node `node` of scan `scan_id` means: its rule, its
+    /// folder, or its file. Whole categories can't be protected.
+    pub fn protect_entry(&self, scan_id: u64, node: NodeId, now: u64) -> Result<Entry, String> {
+        self.with_results(scan_id, |results| {
+            let view = results.node(node).ok_or_else(|| no_item(node))?;
+            let path = || {
+                results
+                    .path(node)
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .ok_or_else(|| no_item(node))
+            };
+            let (kind, value, label) = match view.kind {
+                NodeKind::Category => {
+                    return Err(
+                        "Protect a rule, folder, or file inside this category instead.".into(),
+                    );
+                }
+                NodeKind::Rule => (
+                    EntryKind::Rule,
+                    view.rule_id.ok_or_else(|| no_item(node))?,
+                    Some(view.name),
+                ),
+                NodeKind::Location | NodeKind::Folder => (EntryKind::Folder, path()?, None),
+                NodeKind::File => (EntryKind::File, path()?, None),
+            };
+            Ok(Entry {
+                kind,
+                value,
+                label,
+                added_at: now,
+            })
+        })
+    }
+
+    /// Hides what `protected` covers from the current results, keeping
+    /// node ids. Returns the updated overview, if there are results.
+    pub fn apply_protection(&self, protected: &ProtectedList) -> Option<ScanOverview> {
+        let mut session = lock(&self.session);
+        let session = session.as_mut()?;
+        session.results.hide_protected(protected);
+        Some(overview(session.id, &session.results))
+    }
+
+    /// Serializes changes to the Protected list file.
+    pub fn protected_file(&self) -> MutexGuard<'_, ()> {
+        lock(&self.protected_file)
     }
 
     fn with_results<T>(
@@ -203,6 +259,25 @@ mod tests {
         assert!(out_of_date.contains("out of date"), "{out_of_date}");
         let second = completed_id(state.finish_scan(Ok(report(false))));
         assert_eq!(second, first + 1);
+    }
+
+    #[test]
+    fn protection_needs_current_results() {
+        let state = AppState::default();
+        assert!(state.apply_protection(&ProtectedList::new()).is_none());
+        let error = state.protect_entry(1, 0, 0).unwrap_err();
+        assert!(error.contains("out of date"), "{error}");
+
+        state.begin_scan().unwrap();
+        let id = completed_id(state.finish_scan(Ok(report(false))));
+        let overview = state.apply_protection(&ProtectedList::new()).unwrap();
+        assert_eq!(overview.scan_id, id, "same scan, same ids");
+        assert!(
+            state
+                .protect_entry(id, 0, 0)
+                .unwrap_err()
+                .contains("no item")
+        );
     }
 
     #[test]

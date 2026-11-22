@@ -95,6 +95,56 @@ fn a_scan_cancelled_before_it_starts_finds_nothing() {
 }
 
 #[test]
+fn protected_files_and_rules_are_left_out_of_the_scan() {
+    use oj_core::RuleStatus;
+    use oj_safety::{Entry, EntryKind, ProtectedList};
+
+    let m = machine_with_temp_files(3);
+    let temp = m.system.local_app_data.join("Temp");
+    old_file(&temp.join(r"keep\notes.log"));
+    old_file(&temp.join("artwork.psd"));
+    old_file(&m.system.local_app_data.join(r"CrashDumps\app.dmp"));
+    let entry = |kind, value: String| Entry {
+        kind,
+        value,
+        label: None,
+        added_at: 0,
+    };
+    let protected = ProtectedList::from_entries(vec![
+        entry(
+            EntryKind::Folder,
+            temp.join("keep").to_string_lossy().into_owned(),
+        ),
+        entry(EntryKind::Pattern, "*.psd".into()),
+        entry(EntryKind::Rule, "windows.crash-dumps.user".into()),
+    ])
+    .unwrap();
+
+    let report = m.scan_protected(&bundled(), &protected);
+
+    let temp_rule = report
+        .rules
+        .iter()
+        .find(|r| r.rule_id == "windows.temp.user")
+        .unwrap();
+    assert_eq!(temp_rule.findings, 3, "only the batch files");
+    assert_eq!(temp_rule.skipped_user_protected, 2);
+    let dumps = report
+        .rules
+        .iter()
+        .find(|r| r.rule_id == "windows.crash-dumps.user")
+        .unwrap();
+    assert_eq!(dumps.status, RuleStatus::Protected);
+    assert!(
+        report
+            .findings
+            .iter()
+            .all(|f| !f.path.starts_with(temp.join("keep"))
+                && f.path.extension().is_none_or(|e| e != "psd"))
+    );
+}
+
+#[test]
 fn results_tree_reaches_every_finding() {
     let m = machine_with_temp_files(5);
     let temp = m.system.local_app_data.join("Temp");

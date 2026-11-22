@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::attrs::{EntryClass, classify_metadata};
 use crate::deny::{DenyList, DenyReason};
 use crate::path::NormPath;
+use crate::protected::{Entry, EntryKind, ProtectedList};
 use crate::snapshot::FileSnapshot;
 
 /// Whether destructive operations really happen.
@@ -96,7 +97,7 @@ pub enum SkipReason {
 pub struct Executor<'a> {
     mode: Mode,
     deny: &'a DenyList,
-    protected: Vec<NormPath>,
+    protected: ProtectedList,
 }
 
 impl<'a> Executor<'a> {
@@ -104,18 +105,27 @@ impl<'a> Executor<'a> {
         Self {
             mode,
             deny,
-            protected: Vec::new(),
+            protected: ProtectedList::new(),
         }
     }
 
-    /// Adds the user's Protected list: files and folders (with everything
-    /// inside) that must never be touched.
+    /// Uses the user's Protected list: nothing it covers is ever touched.
+    pub fn with_protected_list(mut self, protected: ProtectedList) -> Self {
+        self.protected = protected;
+        self
+    }
+
+    /// Protects these files and folders (with everything inside), in
+    /// addition to the Protected list.
     pub fn with_protected(mut self, protected: &[impl AsRef<Path>]) -> Self {
-        self.protected.extend(
-            protected
-                .iter()
-                .filter_map(|path| NormPath::new(path.as_ref()).ok()),
-        );
+        for path in protected {
+            let _ = self.protected.add(Entry {
+                kind: EntryKind::Folder,
+                value: path.as_ref().to_string_lossy().into_owned(),
+                label: None,
+                added_at: 0,
+            });
+        }
         self
     }
 
@@ -134,7 +144,7 @@ impl<'a> Executor<'a> {
         let path = NormPath::new(&snapshot.path)
             .map_err(|e| SkipReason::Denied(DenyReason::InvalidPath(e)))?;
         self.deny.check_norm(&path).map_err(SkipReason::Denied)?;
-        if self.protected.iter().any(|p| path.starts_with(p)) {
+        if self.protected.covers_norm(&path) {
             return Err(SkipReason::Protected);
         }
         let metadata = match fs::symlink_metadata(&snapshot.path) {

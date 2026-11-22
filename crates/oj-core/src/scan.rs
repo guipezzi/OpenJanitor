@@ -4,7 +4,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use oj_safety::{CancelToken, DenyList, FileSnapshot, NormPath, WalkStats, walk_files};
+use oj_safety::{
+    CancelToken, DenyList, FileSnapshot, NormPath, ProtectedList, WalkStats, walk_files,
+};
 use serde::Serialize;
 
 use crate::age::{DEFAULT_MIN_AGE, describe};
@@ -62,6 +64,8 @@ pub enum RuleStatus {
     NotDetected,
     /// None of the rule's locations exist on this machine.
     NoLocations,
+    /// The user protected the whole rule.
+    Protected,
 }
 
 /// What one rule found.
@@ -86,6 +90,8 @@ pub struct RuleReport {
     pub skipped_recent: u64,
     /// Matching files another rule already reported.
     pub skipped_duplicates: u64,
+    /// Matching files the user protected.
+    pub skipped_user_protected: u64,
     pub walk: WalkStats,
     pub warnings: Vec<String>,
 }
@@ -126,6 +132,8 @@ pub struct Scanner<'a> {
     pub rules: &'a RuleSet,
     pub vars: &'a dyn Vars,
     pub deny: &'a DenyList,
+    /// The user's Protected list: protected rules and files are left out.
+    pub protected: &'a ProtectedList,
 }
 
 impl Scanner<'_> {
@@ -201,10 +209,15 @@ impl Scanner<'_> {
             size_on_disk: 0,
             skipped_recent: 0,
             skipped_duplicates: 0,
+            skipped_user_protected: 0,
             walk: WalkStats::default(),
             warnings: Vec::new(),
         };
 
+        if self.protected.protects_rule(&rule.id) {
+            report.status = RuleStatus::Protected;
+            return report;
+        }
         if let Some(detect) = &rule.detect {
             let detected = expand(detect, self.vars).is_ok_and(|path| path.exists());
             if !detected {
@@ -247,6 +260,10 @@ impl Scanner<'_> {
                     return;
                 };
                 if !compiled.matches(&relative) {
+                    return;
+                }
+                if !self.protected.is_empty() && self.protected.covers(&snapshot.path) {
+                    report.skipped_user_protected += 1;
                     return;
                 }
                 // A modified time in the future counts as "just modified".

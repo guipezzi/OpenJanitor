@@ -4,7 +4,7 @@ import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 
 export type Level = 'simple' | 'advanced'
 export type Risk = 'low' | 'medium' | 'review'
-export type RuleStatus = 'scanned' | 'not_detected' | 'no_locations'
+export type RuleStatus = 'scanned' | 'not_detected' | 'no_locations' | 'protected'
 
 export interface WalkStats {
   files: number
@@ -33,6 +33,8 @@ export interface RuleReport {
   size_on_disk: number
   skipped_recent: number
   skipped_duplicates: number
+  /** Matching files the user protected. */
+  skipped_user_protected: number
   walk: WalkStats
   warnings: string[]
 }

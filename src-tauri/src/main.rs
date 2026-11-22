@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod commands;
+mod protected;
 mod state;
 
 fn main() {
@@ -18,6 +19,12 @@ fn main() {
             commands::cancel_scan,
             commands::scan_children,
             commands::reveal_in_explorer,
+            protected::protected_entries,
+            protected::protect_item,
+            protected::protect_pattern,
+            protected::unprotect,
+            protected::export_protected,
+            protected::import_protected,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenJanitor");

@@ -308,6 +308,13 @@ If a browser or app whose cache is selected is still running, the app asks the u
 
 Items the user marks as false positives. Granularity: a file, a folder (recursive), a glob pattern (`*.psd`), or a whole rule. The list can be imported and exported as a file. Protected items never show up in results.
 
+- **Patterns:** without a `\` or `/` they match file names anywhere (`*.psd`); with one, they match full paths (`D:\Projects\**`). Matching ignores case, like Windows.
+- **Two layers:** the scanner leaves protected rules and files out, and the executor in `oj-safety` refuses them even if something asks it to act on one.
+- **Protecting from the results** (a rule, a folder, or a file in the details panel) hides it at once and recomputes the totals, without a new scan and without losing the selection. Whole categories can't be protected; their rules can.
+- **Storage:** `protected.json` in `%LOCALAPPDATA%\OpenJanitor`, saved atomically. If the file exists but can't be read, OpenJanitor refuses to scan or change anything and says why. A damaged list never counts as an empty one.
+- **Import** adds entries and never removes any. **Export** saves a copy where the user picks. Both use the native Windows dialogs, opened from Rust; the UI gets no file access.
+- Items the user stops protecting show up again on the next scan.
+
 ### 7.3 Quarantine screen
 
 Uses the same tree component, with **Restore** and **Delete now** actions. It shows each item's expiry date, the total size held, and "Empty quarantine now".
@@ -396,7 +403,7 @@ Candidate crates, to validate in phase 0: `windows` (Win32 APIs), `serde` + `tom
 
 Most of the code will be AI-generated. These rules keep it safe:
 
-1. **Only `oj-safety` may delete or move files.** CI fails if `remove_file`, `remove_dir`, `remove_dir_all`, `rename`, or the equivalent Win32 calls appear anywhere else. The UI gets no file system or shell access at all: no Tauri `fs` or `shell` plugin, and its capabilities allow only `core:default`. It reaches the disk only through Rust commands in `src-tauri`.
+1. **Only `oj-safety` may delete or move files.** CI fails if `remove_file`, `remove_dir`, `remove_dir_all`, `rename`, or the equivalent Win32 calls appear anywhere else. The UI gets no file system or shell access at all: no Tauri `fs` or `shell` plugin (the lockfiles are checked too, so one can't arrive as a dependency of another plugin), and its capabilities allow only `core:default`. It reaches the disk only through Rust commands in `src-tauri`.
 2. **Tests never touch the real system.** They use temp directories and a fixture generator that builds fake profiles: temp files, junctions, read-only files, locked files, hard links.
 3. **Dry-run mode (`OJ_DRY_RUN=1`)** makes every destructive operation log instead of act. Dev builds default to dry-run; turning it off is explicit.
 4. **CI on every push:** `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, UI lint, typecheck and tests, and the check from item 1.

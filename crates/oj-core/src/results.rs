@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use oj_safety::ProtectedList;
 use serde::Serialize;
 
 use crate::rule::Risk;
@@ -88,6 +89,9 @@ struct Node {
     file_count: u64,
     last_modified: u64,
     needs_admin: bool,
+    /// Protected after the scan, or left empty by that. Hidden nodes keep
+    /// their ids, so the UI's other node ids stay valid.
+    hidden: bool,
 }
 
 impl Node {
@@ -104,6 +108,7 @@ impl Node {
             file_count: 0,
             last_modified: 0,
             needs_admin: false,
+            hidden: false,
         }
     }
 }
@@ -114,16 +119,25 @@ pub struct ScanResults {
     report: ScanReport,
     nodes: Vec<Node>,
     categories: Vec<NodeId>,
+    /// Each rule's protected-file count from the scan itself, before any
+    /// [`hide_protected`](Self::hide_protected).
+    protected_at_scan: Vec<u64>,
 }
 
 impl ScanResults {
     pub fn new(report: ScanReport) -> Self {
         let mut nodes = Vec::new();
         let categories = build(&report, &mut nodes);
+        let protected_at_scan = report
+            .rules
+            .iter()
+            .map(|rule| rule.skipped_user_protected)
+            .collect();
         let mut results = Self {
             report,
             nodes,
             categories,
+            protected_at_scan,
         };
         results.add_up();
         results.link_children();
@@ -153,10 +167,15 @@ impl ScanResults {
             .collect()
     }
 
+    /// One node, if it exists and isn't hidden.
+    pub fn node(&self, id: NodeId) -> Option<NodeView> {
+        self.visible(id).map(|_| self.view(id))
+    }
+
     /// Up to `limit` children of `id`, starting at `offset`, biggest first.
-    /// `None` if there's no such node.
+    /// `None` if there's no such node (or it's hidden).
     pub fn children(&self, id: NodeId, offset: usize, limit: usize) -> Option<ChildPage> {
-        let node = self.nodes.get(id as usize)?;
+        let node = self.visible(id)?;
         let items = node
             .children
             .iter()
@@ -175,12 +194,13 @@ impl ScanResults {
         self.nodes.get(id as usize)?.path.as_deref()
     }
 
-    /// Every finding inside `id`. Empty if there's no such node.
+    /// Every finding inside `id`. Empty if there's no such node (or it's
+    /// hidden). Hidden findings are never included.
     pub fn findings_under(&self, id: NodeId) -> Vec<&Finding> {
         let mut found = Vec::new();
         let mut pending = vec![id];
         while let Some(id) = pending.pop() {
-            let Some(node) = self.nodes.get(id as usize) else {
+            let Some(node) = self.visible(id) else {
                 continue;
             };
             if let Some(finding) = node.finding {
@@ -189,6 +209,75 @@ impl ScanResults {
             pending.extend(&node.children);
         }
         found
+    }
+
+    /// Hides every file the Protected list covers (or whose rule it
+    /// protects), then recomputes totals up the tree. Folders, rules, and
+    /// categories left empty are hidden too. Returns how many files were
+    /// hidden. Node ids don't change, so the UI keeps its selection.
+    pub fn hide_protected(&mut self, protected: &ProtectedList) -> usize {
+        let mut hidden = 0;
+        for node in &mut self.nodes {
+            let Some(index) = node.finding.filter(|_| !node.hidden) else {
+                continue;
+            };
+            let finding = &self.report.findings[index];
+            if protected.protects_rule(&finding.rule_id) || protected.covers(&finding.path) {
+                node.hidden = true;
+                hidden += 1;
+            }
+        }
+        if hidden > 0 {
+            self.recompute();
+        }
+        hidden
+    }
+
+    /// Recomputes every total, the child lists, and the report's per-rule
+    /// numbers from the visible files.
+    fn recompute(&mut self) {
+        for node in self.nodes.iter_mut().filter(|node| node.finding.is_none()) {
+            node.size_on_disk = 0;
+            node.file_count = 0;
+            node.last_modified = 0;
+            node.needs_admin = false;
+            node.hidden = false;
+        }
+        self.add_up();
+        for node in self.nodes.iter_mut().filter(|node| node.finding.is_none()) {
+            node.hidden = node.file_count == 0;
+        }
+        self.link_children();
+
+        let mut per_rule = vec![(0u64, 0u64, 0u64); self.report.rules.len()];
+        for node in self.nodes.iter().filter(|node| node.finding.is_some()) {
+            if let Some(rule) = node.rule {
+                let (files, size, protected) = &mut per_rule[rule];
+                if node.hidden {
+                    *protected += 1;
+                } else {
+                    *files += 1;
+                    *size += node.size_on_disk;
+                }
+            }
+        }
+        for ((report, (files, size, hidden)), at_scan) in self
+            .report
+            .rules
+            .iter_mut()
+            .zip(per_rule)
+            .zip(&self.protected_at_scan)
+        {
+            report.findings = files;
+            report.size_on_disk = size;
+            report.skipped_user_protected = at_scan + hidden;
+        }
+        self.report.findings_total = self.report.rules.iter().map(|r| r.findings).sum();
+        self.report.size_on_disk_total = self.report.rules.iter().map(|r| r.size_on_disk).sum();
+    }
+
+    fn visible(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.get(id as usize).filter(|node| !node.hidden)
     }
 
     fn view(&self, id: NodeId) -> NodeView {
@@ -218,10 +307,13 @@ impl ScanResults {
         }
     }
 
-    /// Adds every node's numbers into its parent. Children always come
-    /// after their parent in `nodes`, so one backward pass is enough.
+    /// Adds every visible node's numbers into its parent. Children always
+    /// come after their parent in `nodes`, so one backward pass is enough.
     fn add_up(&mut self) {
         for index in (0..self.nodes.len()).rev() {
+            if self.nodes[index].hidden {
+                continue;
+            }
             let Some(parent) = self.nodes[index].parent else {
                 continue;
             };
@@ -242,13 +334,21 @@ impl ScanResults {
         }
     }
 
-    /// Fills in each node's children, biggest first, then by name.
+    /// Fills in each node's visible children, biggest first, then by name.
     fn link_children(&mut self) {
+        for node in &mut self.nodes {
+            node.children.clear();
+        }
         for index in 0..self.nodes.len() {
+            if self.nodes[index].hidden {
+                continue;
+            }
             if let Some(parent) = self.nodes[index].parent {
                 self.nodes[parent as usize].children.push(index as NodeId);
             }
         }
+        self.categories
+            .retain(|&id| !self.nodes[id as usize].hidden);
         let order = |nodes: &[Node], ids: &mut Vec<NodeId>| {
             ids.sort_by(|&a, &b| {
                 let (a, b) = (&nodes[a as usize], &nodes[b as usize]);
@@ -441,6 +541,7 @@ mod tests {
             size_on_disk: 0,
             skipped_recent: 0,
             skipped_duplicates: 0,
+            skipped_user_protected: 0,
             walk: WalkStats::default(),
             warnings: Vec::new(),
         }
@@ -690,6 +791,73 @@ mod tests {
             (file.kind, file.name.as_str()),
             (NodeKind::File, "MEMORY.DMP")
         );
+    }
+
+    #[test]
+    fn protecting_after_the_scan_hides_items_and_updates_totals() {
+        use oj_safety::{Entry, EntryKind};
+
+        let mut results = ScanResults::new(report(
+            vec![
+                rule("temp.user", "temporary-files", Risk::Low, false),
+                rule("dumps", "crash-reports", Risk::Low, false),
+            ],
+            &[
+                ("temp.user", TEMP, r"keep\a.log", 100),
+                ("temp.user", TEMP, r"keep\b.log", 50),
+                ("temp.user", TEMP, "c.tmp", 10),
+                ("dumps", r"C:\Dumps", "app.dmp", 1_000),
+            ],
+        ));
+        let temp_rule = results
+            .categories()
+            .into_iter()
+            .find(|c| c.name == "temporary-files")
+            .unwrap()
+            .children
+            .unwrap()[0]
+            .clone();
+        let keep = all_children(&results, temp_rule.id)
+            .into_iter()
+            .find(|n| n.name == "keep")
+            .unwrap();
+        let entry = |kind, value: &str| Entry {
+            kind,
+            value: value.into(),
+            label: None,
+            added_at: 0,
+        };
+        let list = ProtectedList::from_entries(vec![
+            entry(EntryKind::Folder, &format!(r"{TEMP}\Keep")),
+            entry(EntryKind::Rule, "dumps"),
+        ])
+        .unwrap();
+
+        assert_eq!(results.hide_protected(&list), 3);
+
+        let categories = results.categories();
+        assert_eq!(
+            names(&categories),
+            ["temporary-files"],
+            "an emptied category goes away"
+        );
+        let rule = &categories[0].children.as_ref().unwrap()[0];
+        assert_eq!(rule.id, temp_rule.id, "ids don't change");
+        assert_eq!((rule.size_on_disk, rule.file_count), (10, 1));
+        assert_eq!(names(&all_children(&results, rule.id)), ["c.tmp"]);
+        assert!(results.node(keep.id).is_none());
+        assert!(results.children(keep.id, 0, 10).is_none());
+        assert!(results.findings_under(keep.id).is_empty());
+        assert_eq!(results.findings_under(categories[0].id).len(), 1);
+
+        let report = results.report();
+        assert_eq!((report.findings_total, report.size_on_disk_total), (1, 10));
+        assert_eq!(report.rules[0].findings, 1);
+        assert_eq!(report.rules[0].skipped_user_protected, 2);
+        assert_eq!(report.rules[1].findings, 0);
+        assert_eq!(report.rules[1].skipped_user_protected, 1);
+
+        assert_eq!(results.hide_protected(&list), 0, "nothing left to hide");
     }
 
     #[test]

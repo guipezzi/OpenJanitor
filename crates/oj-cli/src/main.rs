@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use oj_core::age::parse_age;
 use oj_core::{EnvVars, Finding, Level, RuleReport, RuleSet, ScanOptions, Scanner};
-use oj_safety::{DenyList, SystemPaths};
+use oj_safety::{DenyList, ProtectedList, SystemPaths};
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -112,6 +112,13 @@ fn run(cli: Cli) -> Result<(), String> {
         } => {
             let system = SystemPaths::discover().map_err(|e| e.to_string())?;
             let deny = DenyList::new(&system).map_err(|e| e.to_string())?;
+            let protected_path = system.protected_list_path();
+            let protected = ProtectedList::load(&protected_path).map_err(|e| {
+                format!(
+                    "your Protected list ({}) couldn't be read, so nothing was scanned: {e}",
+                    protected_path.display()
+                )
+            })?;
             let mut options = ScanOptions::new(level.into());
             options.min_age_override = min_age
                 .as_deref()
@@ -123,6 +130,7 @@ fn run(cli: Cli) -> Result<(), String> {
                 rules: &rules,
                 vars: &EnvVars,
                 deny: &deny,
+                protected: &protected,
             };
             let report = scanner.scan(&options);
             print_json(&ScanOutput {

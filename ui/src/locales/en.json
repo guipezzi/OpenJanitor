@@ -5,7 +5,33 @@
   },
   "nav": {
     "label": "Main",
-    "clean": "Clean"
+    "clean": "Clean",
+    "protected": "Protected"
+  },
+  "protected": {
+    "title": "Protected",
+    "description": "Protected items never show up in results and are never cleaned, even when a rule would find them.",
+    "empty": "Nothing is protected yet. Choose \"Protect\" in the details of any result, or add a pattern above.",
+    "patternLabel": "Protect files matching a pattern",
+    "patternPlaceholder": "*.psd",
+    "patternHint": "A name like *.psd matches anywhere. A path like D:\\Projects\\** matches everything inside it.",
+    "add": "Add",
+    "removeLabel": "Stop protecting {{name}}",
+    "import": "Import…",
+    "export": "Export…",
+    "imported_one": "Added {{count, number}} item from the file.",
+    "imported_other": "Added {{count, number}} items from the file.",
+    "importedNone": "Everything in that file was already protected.",
+    "exported": "Saved a copy of your Protected list.",
+    "comesBack": "Items you stop protecting show up again on the next scan.",
+    "added": "Added {{date}}",
+    "error": "Couldn't update the Protected list",
+    "kind": {
+      "file": "File",
+      "folder": "Folder",
+      "pattern": "Pattern",
+      "rule": "Rule"
+    }
   },
   "scan": {
     "title": "Simple clean",
@@ -49,6 +75,9 @@
     "loading": "Loading…",
     "loadError": "Couldn't load these items: {{error}}",
     "alsoChecked": "Also checked, nothing to clean: {{rules}}",
+    "protectedNotice": "Protected \"{{name}}\". It won't show up in results or be cleaned. Manage it on the Protected screen.",
+    "protectedRules": "Not scanned, because you protected them: {{rules}}",
+    "protectError": "Couldn't protect it: {{error}}",
     "notChecked": "Couldn't fully check without administrator rights: {{rules}}. Checking with admin rights arrives in a later version.",
     "needsAdmin": "Needs administrator rights"
   },
@@ -66,6 +95,8 @@
     "partlyRead": "Some of its folders can only be read with administrator rights, so there may be more to clean.",
     "notRecommended": "\"Select recommended\" leaves this out. Select it yourself if you want to clean it.",
     "openInExplorer": "Open in Explorer",
+    "protect": "Protect",
+    "protectHint": "Never show or clean this again. You can undo it on the Protected screen.",
     "kind": {
       "category": "Category",
       "rule": "Rule",

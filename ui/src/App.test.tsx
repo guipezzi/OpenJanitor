@@ -1,7 +1,14 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
+import {
+  protectedEntries,
+  protectItem,
+  protectPattern,
+  unprotect,
+  type ProtectedEntry,
+} from './lib/protected'
 import {
   cancelScan,
   canScan,
@@ -13,6 +20,15 @@ import {
   type ScanOutcome,
   type ScanOverview,
 } from './lib/scan'
+
+vi.mock('./lib/protected', () => ({
+  protectedEntries: vi.fn(),
+  protectItem: vi.fn(),
+  protectPattern: vi.fn(),
+  unprotect: vi.fn(),
+  exportProtected: vi.fn(),
+  importProtected: vi.fn(),
+}))
 
 vi.mock('./lib/scan', async (importOriginal) => ({
   // Keep the plain helpers; replace the commands.
@@ -40,6 +56,7 @@ function rule(overrides: Partial<RuleReport>): RuleReport {
     size_on_disk: 0,
     skipped_recent: 0,
     skipped_duplicates: 0,
+    skipped_user_protected: 0,
     walk: {
       files: 0,
       directories: 0,
@@ -216,6 +233,79 @@ describe('App', () => {
 
     fireEvent.click(within(details).getByRole('button', { name: 'Open in Explorer' }))
     expect(revealInExplorer).toHaveBeenCalledWith(1, 11)
+  })
+
+  it('protects an item from its details and keeps the selection', async () => {
+    const withoutOldFile: ScanOverview = { ...overview, findings_total: 1156 }
+    vi.mocked(protectItem).mockResolvedValue({ entries: [], overview: withoutOldFile, added: 1 })
+    await scanned()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Windows temporary files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand User temporary files' }))
+    fireEvent.click(await screen.findByText('old.tmp'))
+
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    fireEvent.click(within(details).getByRole('button', { name: 'Protect' }))
+
+    expect(await screen.findByText(/Protected "old.tmp"/)).toBeInTheDocument()
+    expect(protectItem).toHaveBeenCalledWith(1, 11)
+    expect(screen.getByText('can be freed from 1,156 files')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Select Windows temporary files' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(screen.getByText(/Select an item to see/)).toBeInTheDocument()
+  })
+
+  it('lists rules that were not scanned because they are protected', async () => {
+    vi.mocked(scan).mockResolvedValue({
+      status: 'completed',
+      overview: {
+        ...overview,
+        rules: [
+          ...overview.rules,
+          rule({ rule_id: 'app.slack.cache', name: 'Slack cache', status: 'protected' }),
+        ],
+      },
+    })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
+
+    expect(
+      await screen.findByText('Not scanned, because you protected them: Slack cache'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Also checked, nothing to clean: Thumbnail cache')).toBeInTheDocument()
+  })
+
+  it('manages the Protected list on its own screen', async () => {
+    const folder: ProtectedEntry = {
+      kind: 'folder',
+      value: 'C:\\Users\\test\\AppData\\Local\\Temp\\keep',
+      added_at: 1_763_740_800,
+    }
+    const pattern: ProtectedEntry = { kind: 'pattern', value: '*.psd', added_at: 1_763_740_900 }
+    vi.mocked(protectedEntries).mockResolvedValue([folder])
+    vi.mocked(protectPattern).mockResolvedValue({
+      entries: [folder, pattern],
+      overview: null,
+      added: 1,
+    })
+    vi.mocked(unprotect).mockResolvedValue([pattern])
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Protected' }))
+
+    expect(await screen.findByText(folder.value)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Protect files matching a pattern'), {
+      target: { value: '*.psd' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(await screen.findByText('*.psd')).toBeInTheDocument()
+    expect(protectPattern).toHaveBeenCalledWith('*.psd')
+
+    fireEvent.click(screen.getByRole('button', { name: `Stop protecting ${folder.value}` }))
+    await waitFor(() => expect(screen.queryByText(folder.value)).not.toBeInTheDocument())
+    expect(unprotect).toHaveBeenCalledWith('folder', folder.value)
+    expect(screen.getByRole('status')).toHaveTextContent('show up again on the next scan')
   })
 
   it('shows progress while scanning and can cancel', async () => {
