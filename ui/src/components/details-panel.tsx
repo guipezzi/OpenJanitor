@@ -1,4 +1,4 @@
-import { FolderSearch, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { FolderSearch, Shield, ShieldAlert, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -14,11 +14,13 @@ interface DetailsPanelProps {
   node: NodeView | null
   rule: RuleReport | undefined
   onReveal: (node: NodeView) => Promise<void>
+  /** Protects the rule, folder, or file (not a whole category). */
+  onProtect: (node: NodeView) => void
   className?: string
 }
 
 /** Why an item was found (PLANNING.md section 7.1). */
-export function DetailsPanel({ node, rule, onReveal, className }: DetailsPanelProps) {
+export function DetailsPanel({ node, rule, onReveal, onProtect, className }: DetailsPanelProps) {
   const { t, i18n } = useTranslation()
   const label = useNodeLabel()
   const locale = i18n.language
@@ -117,12 +119,20 @@ export function DetailsPanel({ node, rule, onReveal, className }: DetailsPanelPr
         <p className="text-sm text-muted-foreground">{t('details.notRecommended')}</p>
       )}
 
-      {node.path && (
-        <Button variant="outline" onClick={reveal}>
-          <FolderSearch />
-          {t('details.openInExplorer')}
-        </Button>
-      )}
+      <div className="flex flex-wrap gap-2">
+        {node.path && (
+          <Button variant="outline" onClick={reveal}>
+            <FolderSearch />
+            {t('details.openInExplorer')}
+          </Button>
+        )}
+        {node.kind !== 'category' && (
+          <Button variant="outline" onClick={() => onProtect(node)} title={t('details.protectHint')}>
+            <Shield />
+            {t('details.protect')}
+          </Button>
+        )}
+      </div>
       {revealError?.id === node.id && (
         <p className="flex gap-2 text-sm text-destructive">
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />

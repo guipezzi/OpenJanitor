@@ -126,6 +126,11 @@ impl SystemPaths {
         }
     }
 
+    /// Where the user's Protected list is saved (PLANNING.md §7.2).
+    pub fn protected_list_path(&self) -> PathBuf {
+        self.app_data.join("protected.json")
+    }
+
     /// Where files from this user's own folders go into quarantine
     /// (PLANNING.md §4.5).
     pub fn personal_quarantine(&self) -> PathBuf {

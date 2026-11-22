@@ -20,8 +20,8 @@
 //! stored file must still be the same file (size, modified time, file ID)
 //! before it's restored or deleted.
 
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,6 +33,7 @@ use crate::attrs::{EntryClass, classify_metadata};
 use crate::deny::DenyReason;
 use crate::exec::{Executor, Mode, Outcome, SkipReason, skip_reason_for};
 use crate::path::NormPath;
+use crate::persist::{tmp_path, write_atomic};
 use crate::snapshot::FileSnapshot;
 
 /// The manifest format written by this version. Newer formats are refused,
@@ -44,7 +45,6 @@ pub const MANIFEST_VERSION: u32 = 1;
 pub const REPLACED_BY_RESTORE: &str = "quarantine.replaced-by-restore";
 
 const MANIFEST: &str = "manifest.json";
-const MANIFEST_TMP: &str = "manifest.json.tmp";
 const ITEMS: &str = "items";
 
 /// Where an item is in its life.
@@ -387,12 +387,7 @@ impl Batch {
     /// the new one, never half of either.
     fn save(&self) -> io::Result<()> {
         let json = serde_json::to_vec_pretty(&self.manifest).map_err(io::Error::other)?;
-        let tmp = self.dir.join(MANIFEST_TMP);
-        let mut file = File::create(&tmp)?;
-        file.write_all(&json)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, self.dir.join(MANIFEST))
+        write_atomic(&self.dir.join(MANIFEST), &json)
     }
 
     /// Removes the batch folder once nothing in it needs keeping. Returns
@@ -409,7 +404,7 @@ impl Batch {
             Err(_) => return Ok(false),
         }
         fs::remove_file(self.dir.join(MANIFEST))?;
-        let _ = fs::remove_file(self.dir.join(MANIFEST_TMP));
+        let _ = fs::remove_file(tmp_path(&self.dir.join(MANIFEST)));
         fs::remove_dir(&self.dir)?;
         self.on_disk = false;
         Ok(true)

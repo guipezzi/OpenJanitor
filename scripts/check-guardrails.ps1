@@ -51,7 +51,8 @@ $excluded = @(
 $allowedFile = Join-Path $root 'crates\oj-windows\src\file_move.rs'
 
 $files = @(
-    Get-ChildItem -Path $root -Recurse -File -Include *.rs, *.ts, *.tsx, *.js, *.jsx, *.mjs, Cargo.toml, package.json
+    # Lockfiles too, so a banned plugin pulled in by another dependency is caught.
+    Get-ChildItem -Path $root -Recurse -File -Include *.rs, *.ts, *.tsx, *.js, *.jsx, *.mjs, Cargo.toml, Cargo.lock, package.json, package-lock.json
     Get-ChildItem -Path (Join-Path $root 'src-tauri\capabilities') -Recurse -File -ErrorAction SilentlyContinue
 ) |
     Where-Object {

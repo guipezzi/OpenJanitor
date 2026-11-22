@@ -15,3 +15,7 @@ oj-core = { path = "../crates/oj-core" }
 oj-safety = { path = "../crates/oj-safety" }
 serde = { version = "1.0.229", features = ["derive"] }
 tauri = { version = "2.12.7", features = [] }
+# Native open/save dialogs, used from Rust only (importing and exporting the
+# Protected list). Not Tauri's dialog plugin: it depends on Tauri's file
+# system plugin, which the guardrails ban.
+rfd = "0.18.0"

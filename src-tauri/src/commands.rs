@@ -97,10 +97,12 @@ fn run_scan(
     let rules = RuleSet::bundled().map_err(|e| e.to_string())?;
     let system = SystemPaths::discover().map_err(|e| e.to_string())?;
     let deny = DenyList::new(&system).map_err(|e| e.to_string())?;
+    let protected = crate::protected::load(&system.protected_list_path())?;
     let scanner = Scanner {
         rules: &rules,
         vars: &EnvVars,
         deny: &deny,
+        protected: &protected,
     };
 
     let mut last_sent: Option<(usize, Instant)> = None;

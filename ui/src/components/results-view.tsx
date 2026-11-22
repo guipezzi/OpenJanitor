@@ -1,4 +1,4 @@
-import { ListChecks, ShieldAlert } from 'lucide-react'
+import { ListChecks, Shield, ShieldAlert, TriangleAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -6,20 +6,39 @@ import { DetailsPanel } from '@/components/details-panel'
 import { ResultsTree } from '@/components/results-tree'
 import { Button } from '@/components/ui/button'
 import { formatBytes } from '@/lib/format'
+import { useNodeLabel } from '@/lib/labels'
+import { protectItem } from '@/lib/protected'
 import { couldNotRead, revealInExplorer, type NodeView, type ScanOverview } from '@/lib/scan'
 import { recommended, tallyAll, toggle } from '@/lib/selection'
 import { useResultsTree } from '@/lib/use-results-tree'
 
+interface ResultsViewProps {
+  overview: ScanOverview
+  /** The results changed (something was protected). Same scan, same node ids. */
+  onOverviewChange: (overview: ScanOverview) => void
+}
+
 /**
  * The results of one scan: the tree, the details panel, and what's
- * selected. Mount it with `key={overview.scan_id}`.
+ * selected. Mount it with `key={overview.scan_id}`; a new overview for the
+ * same scan (after protecting something) keeps the selection.
  */
-export function ResultsView({ overview }: { overview: ScanOverview }) {
+export function ResultsView({ overview, onOverviewChange }: ResultsViewProps) {
   const { t, i18n } = useTranslation()
   const locale = i18n.language
+  const label = useNodeLabel()
   const tree = useResultsTree(overview)
   const [choices, setChoices] = useState<ReadonlyMap<number, boolean>>(() => new Map())
   const [focused, setFocused] = useState<NodeView | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [protectError, setProtectError] = useState<string | null>(null)
+
+  // The focused item may be gone once the results change.
+  const [shown, setShown] = useState(overview)
+  if (shown !== overview) {
+    setShown(overview)
+    setFocused(null)
+  }
 
   const { byNode, total } = useMemo(
     () => tallyAll(overview.categories, choices, tree.loaded),
@@ -32,9 +51,24 @@ export function ResultsView({ overview }: { overview: ScanOverview }) {
   // A rule that needs admin rights and couldn't read its folders found
   // nothing because it couldn't look, not because there's nothing there.
   const listFormat = new Intl.ListFormat(locale, { type: 'conjunction' })
-  const empty = overview.rules.filter((rule) => rule.findings === 0)
+  const protectedRules = overview.rules
+    .filter((rule) => rule.status === 'protected')
+    .map((rule) => rule.name)
+  const empty = overview.rules.filter((rule) => rule.findings === 0 && rule.status !== 'protected')
   const notChecked = empty.filter(couldNotRead).map((rule) => rule.name)
   const nothingFound = empty.filter((rule) => !couldNotRead(rule)).map((rule) => rule.name)
+
+  async function protect(node: NodeView) {
+    setNotice(null)
+    setProtectError(null)
+    try {
+      const update = await protectItem(overview.scan_id, node.id)
+      setNotice(t('results.protectedNotice', { name: label(node) }))
+      if (update.overview) onOverviewChange(update.overview)
+    } catch (cause) {
+      setProtectError(t('results.protectError', { error: String(cause) }))
+    }
+  }
 
   return (
     <div className="flex flex-1 flex-col space-y-4">
@@ -48,6 +82,19 @@ export function ResultsView({ overview }: { overview: ScanOverview }) {
         </Button>
         <p className="text-xs text-muted-foreground">{t('results.recommendedHint')}</p>
       </div>
+
+      {notice && (
+        <p className="flex gap-2 text-sm text-muted-foreground" role="status">
+          <Shield className="mt-0.5 size-4 shrink-0 text-primary" />
+          {notice}
+        </p>
+      )}
+      {protectError && (
+        <p className="flex gap-2 text-sm text-destructive" role="alert">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          {protectError}
+        </p>
+      )}
 
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <ResultsTree
@@ -67,6 +114,7 @@ export function ResultsView({ overview }: { overview: ScanOverview }) {
           node={focused}
           rule={focused?.rule_id ? rules.get(focused.rule_id) : undefined}
           onReveal={(node) => revealInExplorer(overview.scan_id, node.id)}
+          onProtect={(node) => void protect(node)}
         />
       </div>
 
@@ -79,6 +127,11 @@ export function ResultsView({ overview }: { overview: ScanOverview }) {
       {nothingFound.length > 0 && (
         <p className="text-sm text-muted-foreground">
           {t('results.alsoChecked', { rules: listFormat.format(nothingFound) })}
+        </p>
+      )}
+      {protectedRules.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {t('results.protectedRules', { rules: listFormat.format(protectedRules) })}
         </p>
       )}
 

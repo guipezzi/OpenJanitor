@@ -11,6 +11,8 @@
 //! - [`quarantine`]: moving files aside so they can be restored, and
 //!   deleting them for good later.
 //! - [`hash`]: content fingerprints, only when a feature asks for one.
+//! - [`protected`]: the user's Protected list.
+//! - [`persist`]: crash-safe saving of OpenJanitor's own files.
 
 #![forbid(unsafe_code)]
 
@@ -19,6 +21,8 @@ pub mod deny;
 pub mod exec;
 pub mod hash;
 pub mod path;
+pub mod persist;
+pub mod protected;
 pub mod quarantine;
 pub mod snapshot;
 pub mod system;
@@ -28,6 +32,7 @@ pub use attrs::EntryClass;
 pub use deny::{DenyList, DenyReason};
 pub use exec::{Executor, Mode, Outcome, SkipReason};
 pub use path::{NormPath, PathError};
+pub use protected::{Entry, EntryKind, ProtectedError, ProtectedList};
 pub use quarantine::{Batch, IfExists, Item, ItemState, Manifest, ManifestError, Store};
 pub use snapshot::FileSnapshot;
 pub use system::{DiscoverError, SystemPaths};

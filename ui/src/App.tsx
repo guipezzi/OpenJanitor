@@ -2,7 +2,8 @@ import { LoaderCircle, Search, ShieldCheck, Sparkles, TriangleAlert } from 'luci
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { AppSidebar } from '@/components/app-sidebar'
+import { AppSidebar, type Screen } from '@/components/app-sidebar'
+import { ProtectedScreen } from '@/components/protected-screen'
 import { ResultsView } from '@/components/results-view'
 import { ScanProgressPanel } from '@/components/scan-progress'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -15,9 +16,11 @@ import {
   type ScanOverview,
   type ScanProgress,
 } from '@/lib/scan'
+import { cn } from '@/lib/utils'
 
 export default function App() {
   const { t, i18n } = useTranslation()
+  const [screen, setScreen] = useState<Screen>('clean')
   const [overview, setOverview] = useState<ScanOverview | null>(null)
   const [scanning, setScanning] = useState(false)
   const [progress, setProgress] = useState<ScanProgress | null>(null)
@@ -63,9 +66,15 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-muted/40">
-      <AppSidebar />
-      <main id="clean" className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full max-w-6xl flex-col space-y-6 px-6 pt-6">
+      <AppSidebar screen={screen} onNavigate={setScreen} />
+      <main className="min-w-0 flex-1 overflow-y-auto">
+        {/* Screens stay mounted when hidden, so results and selections survive a visit elsewhere. */}
+        <div
+          className={cn(
+            'mx-auto min-h-full max-w-6xl flex-col space-y-6 px-6 pt-6',
+            screen === 'clean' ? 'flex' : 'hidden',
+          )}
+        >
           <header className="flex flex-wrap items-start gap-4">
             <div className="min-w-0 flex-1">
               <h2 className="text-xl font-semibold">{t('scan.title')}</h2>
@@ -105,7 +114,11 @@ export default function App() {
                 </p>
               </div>
               {overview.categories.length > 0 ? (
-                <ResultsView key={overview.scan_id} overview={overview} />
+                <ResultsView
+                  key={overview.scan_id}
+                  overview={overview}
+                  onOverviewChange={setOverview}
+                />
               ) : (
                 <p className="pb-6 text-sm text-muted-foreground">{t('scan.nothingFound')}</p>
               )}
@@ -118,6 +131,9 @@ export default function App() {
               </div>
             )
           )}
+        </div>
+        <div className={cn('mx-auto max-w-4xl px-6 pt-6', screen !== 'protected' && 'hidden')}>
+          <ProtectedScreen active={screen === 'protected'} onOverviewChange={setOverview} />
         </div>
       </main>
     </div>

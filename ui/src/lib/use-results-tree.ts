@@ -43,6 +43,16 @@ export function useResultsTree(overview: ScanOverview) {
     () => new Set(overview.categories.map((category) => category.id)),
   )
 
+  // A new overview for the same scan (after protecting something): node ids
+  // are the same, but totals and children changed, so start over from the
+  // categories. The caller keeps its selection.
+  const [source, setSource] = useState(overview)
+  if (source !== overview) {
+    setSource(overview)
+    setPages(initialPages(overview))
+    setExpanded(new Set(overview.categories.map((category) => category.id)))
+  }
+
   const load = useCallback(
     async (id: number, offset: number) => {
       const update = (change: (page: Page) => Page) =>
