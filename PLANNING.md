@@ -1,6 +1,6 @@
 # OpenJanitor — Project Plan
 
-> **Status:** phase 0 done; phase 1 planned ([§10](#phase-1--mvp-simple-clean)), implementation starting · **Last updated:** 2026-11-21
+> **Status:** phase 0 done; phase 1 in progress ([§10](#phase-1--mvp-simple-clean)): the app can clean, with quarantine and the Protected list · **Last updated:** 2026-11-22
 >
 > This document is the source of truth for scope and design decisions. Change it through pull requests, like code.
 
@@ -61,6 +61,8 @@ Commercial cleaners usually lock their most useful features behind a paywall. Op
 | D23 | Restore with "Replace" | The file currently at the destination goes to quarantine instead of being overwritten ([§4.5](#45-quarantine)) |
 | D24 | Risk vs. recommended | Risk answers "can losing this hurt?"; a separate `recommended` flag answers "should it be preselected?" ([§5.3](#53-rule-engine)) |
 | D25 | Expired system items | No UAC prompt at startup: they're purged during the next cleanup that already uses the helper, or with an "Empty (needs admin)" button ([§4.5](#45-quarantine)) |
+| D26 | Cleanup plan     | The confirmation shows a fixed plan, built in Rust from the selection. Confirming runs exactly that plan: it can lose files that changed (revalidation) but never gains any. Results older than an hour come with a "Scan again" suggestion ([§7.1](#71-main-screen)) |
+| D27 | Confirming deletion | When a plan deletes files for good, an "I understand that N files will be permanently deleted" checkbox must be ticked before the button works ([§7.1](#71-main-screen)) |
 
 ## 4. Safety model
 
@@ -105,6 +107,11 @@ Things change between the scan and the action. Right before moving or deleting a
 Anything that changed is skipped and reported.
 
 **Empty folders.** After a cleanup removes the files in a folder, the folder itself is removed if it's now empty and lies inside one of the rule's locations. A rule's own location (such as `%TEMP%` itself) is never removed.
+
+- Only folders that held a file the cleanup removed are candidates, deepest first, so a folder whose only content was emptied folders goes too.
+- Each one goes through the same checks as a file: not denied, not protected, and still a plain folder (a junction put in its place is left alone).
+- Windows only removes a folder that is empty at that moment, so a file created meanwhile keeps it. Folders that are a program's current directory can't be removed and are kept.
+- Dry runs remove no folders, since their files are still there.
 
 ### 4.5 Quarantine
 
@@ -164,6 +171,12 @@ Restore points are created **only for advanced cleanups**, by the elevated helpe
 ### 4.8 Audit log
 
 Every action is appended to a local log with timestamp, path, size, rule id, and result: delete, quarantine, restore, purge, restore point, and built-in action. The log is shown on the History screen and never leaves the machine.
+
+- **File:** `%LOCALAPPDATA%\OpenJanitor\history.jsonl`, JSON Lines (D16). Each line has a `type` and a format version `v`.
+- **A cleanup writes** one `file` line per file it acted on or skipped (with the reason), one `folder` line per folder it removed, and a final `cleanup` line with the totals. Its lines share a `cleanup` number.
+- **Dry runs are logged too,** marked `"mode": "dry_run"`, so the History screen can tell them apart.
+- If the log can't be opened, the cleanup doesn't start. If a write fails partway, the cleanup goes on (the quarantine manifests still record every move) and the summary says the history is incomplete.
+- **Size:** about 300 bytes per file, so a 20,000-file cleanup adds about 6 MB. How long to keep it, and whether to trim old cleanups down to their totals, is decided with the History screen (PR 7).
 
 ## 5. Architecture
 
@@ -303,6 +316,16 @@ If a browser or app whose cache is selected is still running, the app asks the u
 - **Details panel** on click: why the item was flagged, rule, evidence, last modified, "Open in Explorer"
 - Footer: selected count and total size, with **Protect** and **Clean** actions. The Clean label reflects the policy (delete or quarantine).
 - Scan progress with a cancel button
+
+**Cleaning** (D26, D27):
+
+1. **Clean…** sends the selection (node ids, never paths) to Rust, which builds the plan: low risk is deleted, medium and review go to quarantine ([§4.5](#45-quarantine)).
+2. **The confirmation** shows each group with its file count and size: "Deleted permanently", "Moved to quarantine for 7 days" (with the date they can be restored until), and "Left out" for items that need admin rights until the elevated helper exists. The button says what happens: *Delete permanently*, *Move to quarantine*, or *Delete and quarantine*.
+3. **Permanent deletion needs a tick:** "I understand that N files will be permanently deleted" unlocks the button. Plans that only quarantine don't ask, since they can be undone.
+4. **Old results:** if the scan is more than an hour old, the confirmation says so and offers *Scan again*. Nothing is recalculated behind the user's back.
+5. **Progress** with *Stop*, which finishes the current file and then stops. One scan or cleanup runs at a time.
+6. **Summary:** space freed now, what's in quarantine and until when, files left alone by reason (in use, changed since the scan, ...), folders removed, and files not touched after *Stop*. The old results are cleared; *Scan again* starts fresh.
+7. **Dev builds run in dry-run mode** ([§9](#9-development-guardrails)), and the confirmation, progress, and summary say "Test mode".
 
 ### 7.2 Protected list
 
@@ -456,7 +479,8 @@ Small PRs in four blocks. Each one leaves the app working. The Clean button only
 
 **C. Clean for real**
 
-6. **Clean button.** A confirmation that shows what will be deleted and what will be quarantined, the per-risk policy, the audit log, and a results screen. The UI sends finding ids from the last scan, never paths. Dev builds stay in dry-run and say so on screen.
+6. **Clean button.** A confirmation that shows what will be deleted and what will be quarantined, the per-risk policy, the audit log, and a results screen. The UI sends finding ids from the last scan, never paths. Dev builds stay in dry-run and say so on screen. Admin-only items are left out (and counted) until PR 11. Quarantine recovery runs at startup.
+   - **6b. Running apps.** Before cleaning a browser or app cache, ask the user to close the app if it's running ([§6.1](#61-simple-clean-phase-1)), instead of skipping its open files.
 7. **Quarantine and History screens**, and purging expired items at startup.
 8. **Settings.** Minimum age, quarantine policy and retention, "Always quarantine everything", and theme (system, light, dark).
 9. **Recycle Bin** through the shell API.

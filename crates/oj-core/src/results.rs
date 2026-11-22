@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use oj_safety::ProtectedList;
 use serde::Serialize;
@@ -113,9 +114,13 @@ impl Node {
     }
 }
 
+/// Numbers each [`ScanResults`] built in this process.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 /// A finished scan and its results tree.
 #[derive(Debug)]
 pub struct ScanResults {
+    id: u64,
     report: ScanReport,
     nodes: Vec<Node>,
     categories: Vec<NodeId>,
@@ -134,6 +139,7 @@ impl ScanResults {
             .map(|rule| rule.skipped_user_protected)
             .collect();
         let mut results = Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             report,
             nodes,
             categories,
@@ -145,8 +151,43 @@ impl ScanResults {
         results
     }
 
+    /// Tells these results apart from any others built in this process, so
+    /// a cleanup plan only ever runs against the results it was made from.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     pub fn report(&self) -> &ScanReport {
         &self.report
+    }
+
+    /// The findings a selection covers, as indices into
+    /// `report().findings`, in tree order (category, rule, folder, file).
+    ///
+    /// `choices` are the UI's explicit choices by node id. A node without
+    /// one follows its closest ancestor that has one; nodes with no such
+    /// ancestor aren't selected. Hidden nodes are never included, and ids
+    /// that aren't in the tree are ignored.
+    pub fn selected(&self, choices: &HashMap<NodeId, bool>) -> Vec<usize> {
+        let mut found = Vec::new();
+        let mut pending: Vec<(NodeId, bool)> = self
+            .categories
+            .iter()
+            .rev()
+            .map(|&id| (id, false))
+            .collect();
+        while let Some((id, inherited)) = pending.pop() {
+            let Some(node) = self.visible(id) else {
+                continue;
+            };
+            let selected = choices.get(&id).copied().unwrap_or(inherited);
+            match node.finding {
+                Some(finding) if selected => found.push(finding),
+                Some(_) => {}
+                None => pending.extend(node.children.iter().rev().map(|&child| (child, selected))),
+            }
+        }
+        found
     }
 
     /// The top level: categories, biggest first, each with its rules.
@@ -858,6 +899,89 @@ mod tests {
         assert_eq!(report.rules[1].skipped_user_protected, 1);
 
         assert_eq!(results.hide_protected(&list), 0, "nothing left to hide");
+    }
+
+    #[test]
+    fn a_selection_follows_the_closest_choice() {
+        let mut results = ScanResults::new(report(
+            vec![
+                rule("temp", "temporary-files", Risk::Low, false),
+                rule("dumps", "crash-reports", Risk::Low, false),
+            ],
+            &[
+                ("temp", TEMP, r"setup\a.log", 100),
+                ("temp", TEMP, r"setup\b.log", 50),
+                ("temp", TEMP, "c.tmp", 10),
+                ("dumps", r"C:\Dumps", "app.dmp", 1_000),
+            ],
+        ));
+        let path_of = |results: &ScanResults, indices: Vec<usize>| -> Vec<String> {
+            indices
+                .into_iter()
+                .map(|i| {
+                    let path = &results.report().findings[i].path;
+                    path.file_name().unwrap().to_string_lossy().into_owned()
+                })
+                .collect()
+        };
+        let temp = results
+            .categories()
+            .into_iter()
+            .find(|c| c.name == "temporary-files")
+            .unwrap();
+        let rule = temp.children.as_ref().unwrap()[0].clone();
+        let setup = all_children(&results, rule.id)
+            .into_iter()
+            .find(|n| n.name == "setup")
+            .unwrap();
+        let b = all_children(&results, setup.id)
+            .into_iter()
+            .find(|n| n.name == "b.log")
+            .unwrap();
+
+        assert!(
+            results.selected(&HashMap::new()).is_empty(),
+            "nothing by default"
+        );
+
+        let choices = HashMap::from([(temp.id, true), (setup.id, false), (b.id, true)]);
+        assert_eq!(
+            path_of(&results, results.selected(&choices)),
+            ["b.log", "c.tmp"]
+        );
+
+        let everything: HashMap<NodeId, bool> = results
+            .categories()
+            .iter()
+            .map(|c| (c.id, true))
+            .chain([(9_999, false)])
+            .collect();
+        assert_eq!(
+            results.selected(&everything).len(),
+            4,
+            "unknown ids are ignored"
+        );
+
+        let list = ProtectedList::from_entries(vec![oj_safety::Entry {
+            kind: oj_safety::EntryKind::Folder,
+            value: format!(r"{TEMP}\setup"),
+            label: None,
+            added_at: 0,
+        }])
+        .unwrap();
+        results.hide_protected(&list);
+        assert_eq!(
+            path_of(&results, results.selected(&choices)),
+            ["c.tmp"],
+            "hidden files are never selected, even with their own choice"
+        );
+    }
+
+    #[test]
+    fn each_results_has_its_own_id() {
+        let a = ScanResults::new(report(Vec::new(), &[]));
+        let b = ScanResults::new(report(Vec::new(), &[]));
+        assert_ne!(a.id(), b.id());
     }
 
     #[test]

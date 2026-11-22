@@ -155,6 +155,108 @@ fn junctions_are_never_deleted() {
 }
 
 #[test]
+fn an_emptied_folder_inside_the_location_is_removed() {
+    let s = setup();
+    let location = s.root.join("Temp");
+    let folder = location.join(r"setup\logs");
+    fs::create_dir_all(&folder).unwrap();
+    let executor = Executor::new(Mode::Live, &s.deny);
+
+    assert_eq!(
+        executor.remove_empty_folder(&folder, &location),
+        Outcome::Deleted { freed: 0 }
+    );
+    assert!(!folder.exists());
+    assert_eq!(
+        executor.remove_empty_folder(&location.join("setup"), &location),
+        Outcome::Deleted { freed: 0 }
+    );
+    assert!(location.exists());
+}
+
+#[test]
+fn folders_that_still_hold_something_are_kept() {
+    let s = setup();
+    let location = s.root.join("Temp");
+    write_file(&location.join(r"setup\new.log"), 10);
+    fs::create_dir_all(location.join(r"other\inner")).unwrap();
+    let executor = Executor::new(Mode::Live, &s.deny);
+
+    assert_eq!(
+        skipped(executor.remove_empty_folder(&location.join("setup"), &location)),
+        SkipReason::NotEmpty
+    );
+    assert_eq!(
+        skipped(executor.remove_empty_folder(&location.join("other"), &location)),
+        SkipReason::NotEmpty,
+        "an empty subfolder still counts"
+    );
+    assert!(location.join(r"setup\new.log").exists());
+}
+
+#[test]
+fn the_location_itself_and_folders_outside_it_are_never_removed() {
+    let s = setup();
+    let location = s.root.join("Temp");
+    let outside = s.root.join("Elsewhere");
+    fs::create_dir_all(&location).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    let executor = Executor::new(Mode::Live, &s.deny);
+
+    for folder in [&location, &outside, &s.root] {
+        assert_eq!(
+            skipped(executor.remove_empty_folder(folder, &location)),
+            SkipReason::OutsideLocation,
+            "{}",
+            folder.display()
+        );
+        assert!(folder.exists());
+    }
+}
+
+#[test]
+fn denied_protected_and_linked_folders_are_kept() {
+    let s = setup();
+    let windows = s.root.join(r"sys\Windows");
+    let system32 = windows.join("System32");
+    fs::create_dir_all(&system32).unwrap();
+    let location = s.root.join("Temp");
+    let keep = location.join("keep");
+    fs::create_dir_all(&keep).unwrap();
+    let target = s.root.join("target");
+    fs::create_dir_all(&target).unwrap();
+    let link = location.join("link");
+    junction(&link, &target);
+    let executor = Executor::new(Mode::Live, &s.deny).with_protected(&[&keep]);
+
+    assert!(matches!(
+        skipped(executor.remove_empty_folder(&system32, &windows)),
+        SkipReason::Denied(_)
+    ));
+    assert_eq!(
+        skipped(executor.remove_empty_folder(&keep, &location)),
+        SkipReason::Protected
+    );
+    assert_eq!(
+        skipped(executor.remove_empty_folder(&link, &location)),
+        SkipReason::NotARegularFile(EntryClass::ReparsePoint)
+    );
+    assert!(system32.exists() && keep.exists() && link.exists() && target.exists());
+}
+
+#[test]
+fn dry_run_keeps_empty_folders() {
+    let s = setup();
+    let location = s.root.join("Temp");
+    let folder = location.join("setup");
+    fs::create_dir_all(&folder).unwrap();
+
+    let outcome = Executor::new(Mode::DryRun, &s.deny).remove_empty_folder(&folder, &location);
+    assert_eq!(outcome, Outcome::WouldDelete { freed: 0 });
+    assert!(folder.exists());
+}
+
+#[test]
 fn hard_linked_file_frees_nothing() {
     let s = setup();
     let file = s.root.join("a.bin");
