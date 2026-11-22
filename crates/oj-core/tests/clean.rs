@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use common::{FakeMachine, new_file, old_file, write_file};
 use oj_core::{
     CancelToken, CleanProgress, CleanReport, Cleaner, History, NodeId, Plan, Policy,
-    QuarantineGroup, RuleSet, ScanResults, SkipCount,
+    QuarantineGroup, RuleSet, RunningPrograms, ScanResults, SkipCount,
 };
 use oj_safety::{DenyList, Executor, ItemState, Mode, Store};
 use serde_json::Value;
@@ -118,7 +118,12 @@ fn node_named(results: &ScanResults, parent: NodeId, name: &str) -> NodeId {
         .id
 }
 
-/// Runs `plan` and returns the report and the history lines it wrote.
+fn nothing_running() -> RunningPrograms {
+    RunningPrograms::default()
+}
+
+/// Runs `plan` with no apps open and returns the report and the history
+/// lines it wrote.
 fn run(
     machine: &Machine,
     results: &ScanResults,
@@ -127,6 +132,27 @@ fn run(
     cancel: &CancelToken,
     on_progress: &mut dyn FnMut(&CleanProgress),
 ) -> (CleanReport, Vec<Value>) {
+    run_while(
+        machine,
+        results,
+        plan,
+        executor,
+        cancel,
+        on_progress,
+        &nothing_running(),
+    )
+}
+
+/// Runs `plan` while `running` programs are open.
+fn run_while(
+    machine: &Machine,
+    results: &ScanResults,
+    plan: &Plan,
+    executor: &Executor,
+    cancel: &CancelToken,
+    on_progress: &mut dyn FnMut(&CleanProgress),
+    running: &RunningPrograms,
+) -> (CleanReport, Vec<Value>) {
     let store = Store::new(machine.m.system.personal_quarantine());
     let history_path = machine.m.system.history_path();
     let mut history = History::open(&history_path).unwrap();
@@ -134,6 +160,7 @@ fn run(
         executor,
         store: &store,
         history: &mut history,
+        running,
     }
     .run(results, plan, SystemTime::now(), cancel, on_progress);
     let lines = fs::read_to_string(&history_path)
@@ -158,7 +185,12 @@ fn a_plan_follows_the_selection_and_the_policy() {
     let results = scan(&machine);
     let size = |files: u64| files * 8192;
 
-    let plan = Plan::build(&results, &everything(&results), &Policy::default());
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
     let summary = plan.summary();
     assert_eq!(summary.delete.files, 4);
     assert!(summary.delete.size >= size(4), "{summary:?}");
@@ -188,19 +220,32 @@ fn a_plan_follows_the_selection_and_the_policy() {
         .unwrap();
     let busy = node_named(&results, temp_rule.id, "busy");
     let choices = HashMap::from([(temp_rule.id, true), (busy, false)]);
-    let plan = Plan::build(&results, &choices, &Policy::default());
+    let plan = Plan::build(&results, &choices, &Policy::default(), &nothing_running());
     assert_eq!(plan.summary().delete.files, 3);
     assert!(plan.summary().quarantine.is_empty());
     assert_eq!(plan.summary().needs_admin.files, 0);
 
-    assert!(Plan::build(&results, &HashMap::new(), &Policy::default()).is_empty());
+    assert!(
+        Plan::build(
+            &results,
+            &HashMap::new(),
+            &Policy::default(),
+            &nothing_running()
+        )
+        .is_empty()
+    );
 }
 
 #[test]
 fn a_cleanup_deletes_quarantines_and_tidies_up() {
     let machine = machine();
     let results = scan(&machine);
-    let plan = Plan::build(&results, &everything(&results), &Policy::default());
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
     let deny = deny(&machine);
     let executor = Executor::new(Mode::Live, &deny);
     let mut progress = Vec::new();
@@ -325,7 +370,12 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
 fn a_dry_run_changes_nothing() {
     let machine = machine();
     let results = scan(&machine);
-    let plan = Plan::build(&results, &everything(&results), &Policy::default());
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
     let deny = deny(&machine);
     let executor = Executor::new(Mode::DryRun, &deny);
 
@@ -379,7 +429,7 @@ fn files_that_changed_or_are_protected_or_in_use_are_skipped() {
         .filter(|c| c.name == "temporary-files")
         .map(|c| (c.id, true))
         .collect();
-    let plan = Plan::build(&results, &choices, &Policy::default());
+    let plan = Plan::build(&results, &choices, &Policy::default(), &nothing_running());
     assert_eq!(plan.len(), 4);
 
     write_file(&temp.join("a.tmp"), 100);
@@ -430,7 +480,12 @@ fn files_that_changed_or_are_protected_or_in_use_are_skipped() {
 fn cancelling_stops_before_the_next_file() {
     let machine = machine();
     let results = scan(&machine);
-    let plan = Plan::build(&results, &everything(&results), &Policy::default());
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
     let deny = deny(&machine);
     let executor = Executor::new(Mode::Live, &deny);
     let cancel = CancelToken::new();
@@ -453,7 +508,12 @@ fn a_plan_never_runs_against_other_results() {
     let machine = machine();
     let first = scan(&machine);
     let second = scan(&machine);
-    let plan = Plan::build(&first, &everything(&first), &Policy::default());
+    let plan = Plan::build(
+        &first,
+        &everything(&first),
+        &Policy::default(),
+        &nothing_running(),
+    );
     let deny = deny(&machine);
     let executor = Executor::new(Mode::DryRun, &deny);
 
@@ -467,12 +527,114 @@ fn a_plan_never_runs_against_other_results() {
     );
 }
 
+/// A browser rule, for the open-app tests.
+const BROWSER_RULE: &str = r#"
+[[rule]]
+id          = "test.browser"
+category    = "browser-caches"
+level       = "simple"
+risk        = "low"
+paths       = ['%LOCALAPPDATA%\TestBrowser']
+app         = { name = "Test Browser", processes = ["TestBrowser.exe"] }
+name        = "Test Browser cache"
+description = "Pages the browser saved"
+"#;
+
+/// The usual machine plus two cache files of Test Browser.
+fn scan_with_browser(machine: &Machine) -> (ScanResults, PathBuf) {
+    let cache = machine.m.system.local_app_data.join(r"TestBrowser\Cache");
+    old_file(&cache.join("data_1"));
+    old_file(&cache.join("data_2"));
+    let rules =
+        RuleSet::from_sources(&[("test.toml", RULES), ("browser.toml", BROWSER_RULE)]).unwrap();
+    (ScanResults::new(machine.m.scan(&rules)), cache)
+}
+
+#[test]
+fn an_open_app_is_left_out_of_the_plan() {
+    let machine = machine();
+    let (results, _) = scan_with_browser(&machine);
+
+    let running = RunningPrograms::new(["explorer.exe", "testbrowser.EXE"]);
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &running,
+    );
+    let open: Vec<(&str, u64)> = plan
+        .summary()
+        .apps_open
+        .iter()
+        .map(|app| (app.name.as_str(), app.files))
+        .collect();
+    assert_eq!(open, [("Test Browser", 2)]);
+    assert_eq!(
+        plan.summary().delete.files,
+        4,
+        "only the other low-risk files"
+    );
+
+    let closed = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
+    assert!(closed.summary().apps_open.is_empty());
+    assert_eq!(closed.summary().delete.files, 6);
+}
+
+#[test]
+fn an_app_opened_after_the_plan_keeps_its_files() {
+    let machine = machine();
+    let (results, cache) = scan_with_browser(&machine);
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
+    let deny = deny(&machine);
+    let executor = Executor::new(Mode::Live, &deny);
+
+    let (report, history) = run_while(
+        &machine,
+        &results,
+        &plan,
+        &executor,
+        &CancelToken::new(),
+        &mut |_| {},
+        &RunningPrograms::new(["TestBrowser.exe"]),
+    );
+
+    assert!(cache.join("data_1").exists() && cache.join("data_2").exists());
+    assert_eq!(
+        report.skipped,
+        [SkipCount {
+            reason: "app_running",
+            files: 2
+        }]
+    );
+    assert_eq!(report.deleted.files, 4);
+    let skipped = history
+        .iter()
+        .filter(|l| l["reason"]["kind"] == "app_running")
+        .count();
+    assert_eq!(skipped, 2);
+}
+
 #[test]
 fn quarantine_groups_compare_by_days() {
     // The confirmation lists the shortest stay first.
     let machine = machine();
     let results = scan(&machine);
-    let plan = Plan::build(&results, &everything(&results), &Policy::default());
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
     let days: Vec<u32> = plan
         .summary()
         .quarantine

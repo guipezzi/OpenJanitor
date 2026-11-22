@@ -96,8 +96,23 @@ pub struct Rule {
     /// for example a big cache that just grows back.
     #[serde(default = "yes")]
     pub recommended: bool,
+    /// The program whose files these are, such as a browser for its cache.
+    /// While it runs, cleanups leave the rule's files alone.
+    #[serde(default)]
+    pub app: Option<App>,
     pub name: String,
     pub description: String,
+}
+
+/// A program a rule cleans up after (PLANNING.md §6.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct App {
+    /// The name people know it by, such as "Google Chrome".
+    pub name: String,
+    /// Its program files, such as "chrome.exe". It counts as running while
+    /// any of them runs.
+    pub processes: Vec<String>,
 }
 
 fn default_include() -> Vec<String> {
@@ -218,6 +233,20 @@ fn compile(file: &str, rule: Rule) -> Result<CompiledRule, RuleError> {
         return Err(invalid(
             "a rule needs at least one path or a builtin".into(),
         ));
+    }
+    if let Some(app) = &rule.app {
+        if app.name.trim().is_empty() || app.processes.is_empty() {
+            return Err(invalid("an app needs a name and its processes".into()));
+        }
+        for process in &app.processes {
+            let plain = !process.contains(['\\', '/', ':']);
+            let exe = process.len() > 4 && process.to_ascii_lowercase().ends_with(".exe");
+            if !plain || !exe {
+                return Err(invalid(format!(
+                    "process {process:?} must be a program file name like \"chrome.exe\""
+                )));
+            }
+        }
     }
     for template in rule.paths.iter().chain(&rule.detect) {
         check_template(template).map_err(|e| invalid(e.to_string()))?;

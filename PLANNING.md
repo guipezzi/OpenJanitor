@@ -63,6 +63,7 @@ Commercial cleaners usually lock their most useful features behind a paywall. Op
 | D25 | Expired system items | No UAC prompt at startup: they're purged during the next cleanup that already uses the helper, or with an "Empty (needs admin)" button ([§4.5](#45-quarantine)) |
 | D26 | Cleanup plan     | The confirmation shows a fixed plan, built in Rust from the selection. Confirming runs exactly that plan: it can lose files that changed (revalidation) but never gains any. Results older than an hour come with a "Scan again" suggestion ([§7.1](#71-main-screen)) |
 | D27 | Confirming deletion | When a plan deletes files for good, an "I understand that N files will be permanently deleted" checkbox must be ticked before the button works ([§7.1](#71-main-screen)) |
+| D28 | Open apps        | While a browser or app runs, its cache is left out of the plan; the confirmation names it and offers "Check again". OpenJanitor never closes apps itself ([§6.1](#61-simple-clean-phase-1)) |
 
 ## 4. Safety model
 
@@ -244,6 +245,7 @@ description = "Removes superseded Windows components with DISM. Never deletes Wi
 
 - An optional `detect` field shows a rule only when its app exists (for example, Discord's folder).
 - An optional `recommended = false` keeps a low-risk rule out of "Select recommended" (D24). Risk answers "can losing this hurt?"; `recommended` answers "should it be preselected?". Big caches that just grow back (graphics driver shader caches) are low risk but not recommended.
+- An optional `app = { name = "Google Chrome", processes = ["chrome.exe"] }` names the program whose files the rule cleans. While any of those programs runs, the rule's files are left out of cleanups (D28). Process entries are plain program file names, never paths. Every browser and app cache rule must have one (a test checks).
 - Every rule ships with a test: a fixture folder layout and the findings it should produce.
 - Translations live in `rules/locales/<lang>.toml`, keyed by rule id.
 
@@ -283,7 +285,13 @@ The rules live in `rules/*.toml`; each one has a fixture test in `crates/oj-core
 
 Items that need admin rights show a shield icon and go through the helper.
 
-If a browser or app whose cache is selected is still running, the app asks the user to close it first instead of silently skipping the files it has open.
+If a browser or app whose cache is selected is still running, the app asks the user to close it first instead of silently skipping the files it has open (D28):
+
+- Each browser and app rule names its program files (`chrome.exe`, `msedge.exe`, `ms-teams.exe`, ...). Only programs in the user's own Windows session count; other signed-in users' programs don't lock this user's caches.
+- When the plan is built, the caches of running apps are left out. The confirmation names them ("Close this app to clean its cache · Google Chrome · 7,647 files · 420 MB") and offers *Check again*, which builds the plan again.
+- Right before the cleanup starts, the check runs once more. Files of an app opened in between are skipped ("Its app was opened during the cleanup").
+- OpenJanitor never closes apps itself: a closed app could lose unsaved work. Some apps (Edge, Teams, Discord) keep running in the notification area after their window closes, and the confirmation says so.
+- If the list of running programs can't be read, the plan isn't built and the error is shown, rather than guessing that nothing is open.
 
 ### 6.2 Advanced clean (phase 2)
 
@@ -320,7 +328,7 @@ If a browser or app whose cache is selected is still running, the app asks the u
 **Cleaning** (D26, D27):
 
 1. **Clean…** sends the selection (node ids, never paths) to Rust, which builds the plan: low risk is deleted, medium and review go to quarantine ([§4.5](#45-quarantine)).
-2. **The confirmation** shows each group with its file count and size: "Deleted permanently", "Moved to quarantine for 7 days" (with the date they can be restored until), and "Left out" for items that need admin rights until the elevated helper exists. The button says what happens: *Delete permanently*, *Move to quarantine*, or *Delete and quarantine*.
+2. **The confirmation** shows each group with its file count and size: "Deleted permanently", "Moved to quarantine for 7 days" (with the date they can be restored until), and "Left out" for items that need admin rights until the elevated helper exists. Caches of apps that are open are left out too, with a request to close them and *Check again* (D28). The button says what happens: *Delete permanently*, *Move to quarantine*, or *Delete and quarantine*.
 3. **Permanent deletion needs a tick:** "I understand that N files will be permanently deleted" unlocks the button. Plans that only quarantine don't ask, since they can be undone.
 4. **Old results:** if the scan is more than an hour old, the confirmation says so and offers *Scan again*. Nothing is recalculated behind the user's back.
 5. **Progress** with *Stop*, which finishes the current file and then stops. One scan or cleanup runs at a time.
@@ -480,7 +488,7 @@ Small PRs in four blocks. Each one leaves the app working. The Clean button only
 **C. Clean for real**
 
 6. **Clean button.** A confirmation that shows what will be deleted and what will be quarantined, the per-risk policy, the audit log, and a results screen. The UI sends finding ids from the last scan, never paths. Dev builds stay in dry-run and say so on screen. Admin-only items are left out (and counted) until PR 11. Quarantine recovery runs at startup.
-   - **6b. Running apps.** Before cleaning a browser or app cache, ask the user to close the app if it's running ([§6.1](#61-simple-clean-phase-1)), instead of skipping its open files.
+   - **6b. Running apps.** Before cleaning a browser or app cache, ask the user to close the app if it's running ([§6.1](#61-simple-clean-phase-1)), instead of skipping its open files. Rules name their apps' program files (`app`), and the plan leaves open apps out (D28).
 7. **Quarantine and History screens**, and purging expired items at startup.
 8. **Settings.** Minimum age, quarantine policy and retention, "Always quarantine everything", and theme (system, light, dark).
 9. **Recycle Bin** through the shell API.

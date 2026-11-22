@@ -10,7 +10,7 @@ use oj_safety::{
 use serde::Serialize;
 
 use crate::age::{DEFAULT_MIN_AGE, describe};
-use crate::rule::{CompiledRule, Level, Risk, RuleSet};
+use crate::rule::{App, CompiledRule, Level, Risk, RuleSet};
 use crate::vars::{Vars, expand};
 
 /// How to run a scan.
@@ -82,6 +82,10 @@ pub struct RuleReport {
     /// risk).
     pub recommended: bool,
     pub needs_admin: bool,
+    /// The program whose files these are. While it runs, they're left out
+    /// of cleanups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<App>,
     pub status: RuleStatus,
     pub roots: Vec<PathBuf>,
     pub findings: u64,
@@ -203,6 +207,7 @@ impl Scanner<'_> {
             risk: rule.risk,
             recommended: rule.recommended,
             needs_admin: rule.needs_admin,
+            app: rule.app.clone(),
             status: RuleStatus::Scanned,
             roots: Vec::new(),
             findings: 0,

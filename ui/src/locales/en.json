@@ -97,6 +97,13 @@
     "adminTitle": "Left out",
     "adminHint": "They need administrator rights. Cleaning them arrives in a later version.",
     "nothingToClean": "Nothing you selected can be cleaned yet.",
+    "appsOpenTitle_one": "Close this app to clean its cache",
+    "appsOpenTitle_other": "Close these apps to clean their caches",
+    "appsOpenBody": "While an app is open, its cache is left out. Some apps keep running in the notification area after you close their window.",
+    "appsOpenLine": "{{name}} · {{files}}",
+    "checkAgain": "Check again",
+    "checking": "Checking…",
+    "appsLeftOut": "Left out because they were open: {{apps}}.",
     "files_one": "{{count, number}} file · {{size}}",
     "files_other": "{{count, number}} files · {{size}}",
     "understand_one": "I understand that {{count, number}} file will be permanently deleted.",
@@ -152,6 +159,7 @@
       "not_in_quarantine": "No longer in quarantine",
       "not_empty": "Not empty",
       "outside_location": "Outside the rule's location",
+      "app_running": "Its app was opened during the cleanup",
       "failed": "Something went wrong"
     }
   },

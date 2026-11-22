@@ -1,4 +1,4 @@
-import { Archive, Clock, ShieldAlert, Trash, type LucideIcon } from 'lucide-react'
+import { AppWindow, Archive, Clock, ShieldAlert, Trash, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -29,6 +29,9 @@ interface CleanDialogProps {
   onCancel: () => void
   onConfirm: (plan: CleanPlan) => void
   onScanAgain: () => void
+  /** Builds the plan again, after the user closed an app. */
+  onRecheck: () => void
+  rechecking: boolean
 }
 
 /**
@@ -36,24 +39,18 @@ interface CleanDialogProps {
  * deleted, what will go to quarantine, and what's left out. Confirming runs
  * exactly this plan.
  */
-export function CleanDialog({ plan, onCancel, onConfirm, onScanAgain }: CleanDialogProps) {
+export function CleanDialog({ plan, onCancel, ...rest }: CleanDialogProps) {
   return (
     <AlertDialog open={plan !== null} onOpenChange={(open) => !open && onCancel()}>
       {/* A new plan starts with the box unticked. */}
-      {plan && (
-        <Review key={plan.plan_id} plan={plan} onConfirm={onConfirm} onScanAgain={onScanAgain} />
-      )}
+      {plan && <Review key={plan.plan_id} plan={plan} {...rest} />}
     </AlertDialog>
   )
 }
 
-interface ReviewProps {
-  plan: CleanPlan
-  onConfirm: (plan: CleanPlan) => void
-  onScanAgain: () => void
-}
+type ReviewProps = Omit<CleanDialogProps, 'plan' | 'onCancel'> & { plan: CleanPlan }
 
-function Review({ plan, onConfirm, onScanAgain }: ReviewProps) {
+function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewProps) {
   const { t, i18n } = useTranslation()
   const locale = i18n.language
   const [understood, setUnderstood] = useState(false)
@@ -83,6 +80,26 @@ function Review({ plan, onConfirm, onScanAgain }: ReviewProps) {
             <p>{t('clean.staleBody')}</p>
             <Button variant="outline" size="sm" onClick={onScanAgain}>
               {t('clean.scanAgain')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {plan.apps_open.length > 0 && (
+        <Alert className="border-amber-500/40 bg-amber-500/10">
+          <AppWindow className="text-amber-700 dark:text-amber-400" />
+          <AlertTitle>{t('clean.appsOpenTitle', { count: plan.apps_open.length })}</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <ul className="font-medium text-foreground tabular-nums">
+              {plan.apps_open.map((app) => (
+                <li key={app.name}>
+                  {t('clean.appsOpenLine', { name: app.name, files: tally(app) })}
+                </li>
+              ))}
+            </ul>
+            <p>{t('clean.appsOpenBody')}</p>
+            <Button variant="outline" size="sm" onClick={onRecheck} disabled={rechecking}>
+              {rechecking ? t('clean.checking') : t('clean.checkAgain')}
             </Button>
           </AlertDescription>
         </Alert>

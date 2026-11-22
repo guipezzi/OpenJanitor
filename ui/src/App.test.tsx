@@ -176,6 +176,7 @@ const plan: CleanPlan = {
   delete: { files: 1100, size: 200_000_000 },
   quarantine: [{ days: 7, files: 10, size: 1_048_576 }],
   needs_admin: { files: 47, size: 8_037_478 },
+  apps_open: [],
   scanned_at: Math.floor(Date.now() / 1000),
   stale: false,
 }
@@ -190,6 +191,7 @@ const cleaned: CleanReport = {
   not_started: 0,
   folders_removed: 4,
   needs_admin: { files: 47, size: 8_037_478 },
+  apps_open: [],
 }
 
 /** Scans, selects the recommended items, and opens the confirmation. */
@@ -275,6 +277,47 @@ describe('App', () => {
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
     expect(runClean).not.toHaveBeenCalled()
     expect(footer()).toHaveTextContent('1,147 files selected')
+  })
+
+  it('asks to close open apps, then checks again', async () => {
+    const chrome = { name: 'Google Chrome', files: 7647, size: 441_000_000 }
+    const dialog = await reviewing({ ...plan, apps_open: [chrome] })
+
+    expect(within(dialog).getByText('Close this app to clean its cache')).toBeInTheDocument()
+    expect(within(dialog).getByText('Google Chrome · 7,647 files · 420.6 MB')).toBeInTheDocument()
+    expect(within(dialog).getByText(/its cache is left out/)).toBeInTheDocument()
+
+    // The user closed Chrome.
+    vi.mocked(planClean).mockResolvedValue({ ...plan, plan_id: 8 })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check again' }))
+
+    await waitFor(() =>
+      expect(screen.queryByText('Close this app to clean its cache')).not.toBeInTheDocument(),
+    )
+    expect(planClean).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole('alertdialog', { name: 'Review this cleanup' })).toBeInTheDocument()
+  })
+
+  it('says which apps were left out because they were open', async () => {
+    const dialog = await reviewing(plan)
+    vi.mocked(runClean).mockResolvedValue({
+      ...cleaned,
+      apps_open: [
+        { name: 'Google Chrome', files: 7647, size: 441_000_000 },
+        { name: 'Discord', files: 120, size: 9_000_000 },
+      ],
+      skipped: [{ reason: 'app_running', files: 2 }],
+    })
+    fireEvent.click(within(dialog).getByRole('checkbox'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete and quarantine' }))
+
+    const summary = await screen.findByRole('region', { name: 'Cleanup finished' })
+    expect(
+      within(summary).getByText('Left out because they were open: Google Chrome and Discord.'),
+    ).toBeInTheDocument()
+    expect(
+      within(summary).getByText('Its app was opened during the cleanup: 2'),
+    ).toBeInTheDocument()
   })
 
   it('suggests scanning again when the results are old', async () => {

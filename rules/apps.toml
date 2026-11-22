@@ -4,6 +4,10 @@
 # same folder names as Chromium browsers. Only those cache folders are
 # matched: never chats, accounts, settings, or local storage.
 #
+# Each rule names its app's program files (`app`). While the app runs, its
+# cache is left out of cleanups, and the confirmation asks you to close it
+# (PLANNING.md §6.1). New Teams runs as ms-teams.exe.
+#
 # Spotify is left out on purpose: its downloaded songs can share a folder
 # with the cache, and the layout hasn't been verified on a real install.
 
@@ -30,6 +34,7 @@ include     = [
   "GPUPersistentCache/**",
 ]
 min_age     = "24h"
+app         = { name = "Discord", processes = ["Discord.exe", "DiscordPTB.exe", "DiscordCanary.exe"] }
 name        = "Discord cache"
 description = "Images, videos, and scripts Discord saved to load faster. Messages and settings aren't touched."
 
@@ -55,6 +60,7 @@ include     = [
   "ShaderCache/**",
 ]
 min_age     = "24h"
+app         = { name = "Microsoft Teams", processes = ["ms-teams.exe"] }
 name        = "Microsoft Teams cache"
 description = "Images and scripts Teams saved to load faster. Chats, files, and your sign-in aren't touched."
 
@@ -78,6 +84,7 @@ include     = [
   "ShaderCache/**",
 ]
 min_age     = "24h"
+app         = { name = "Slack", processes = ["slack.exe"] }
 name        = "Slack cache"
 description = "Images, files, and scripts Slack saved to load faster. Messages and settings aren't touched."
 
@@ -105,5 +112,6 @@ include     = [
   "CachedExtensionVSIXs/**",
 ]
 min_age     = "24h"
+app         = { name = "Visual Studio Code", processes = ["Code.exe", "Code - Insiders.exe"] }
 name        = "Visual Studio Code cache"
 description = "Compiled code and downloaded extension installers VS Code keeps to start faster. Settings, extensions, and unsaved work aren't touched."

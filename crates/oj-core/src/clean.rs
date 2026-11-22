@@ -13,12 +13,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use oj_safety::{CancelToken, Executor, Mode, Outcome, Store};
+use oj_safety::{CancelToken, Executor, Mode, Outcome, SkipReason, Store};
 use serde::Serialize;
 
 use crate::history::History;
 use crate::results::{NodeId, ScanResults};
 use crate::rule::Risk;
+use crate::running::RunningPrograms;
 
 const DAY: u64 = 24 * 60 * 60;
 
@@ -83,6 +84,15 @@ pub struct QuarantineGroup {
     pub size: u64,
 }
 
+/// Selected files left out because their app is open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenApp {
+    /// The app's name, such as "Google Chrome".
+    pub name: String,
+    pub files: u64,
+    pub size: u64,
+}
+
 /// A plan in totals: what the confirmation shows.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PlanSummary {
@@ -93,6 +103,9 @@ pub struct PlanSummary {
     /// Selected, but left out: cleaning them needs administrator rights,
     /// which arrive with the elevated helper.
     pub needs_admin: Tally,
+    /// Selected, but left out: their app is open (PLANNING.md §6.1).
+    /// Biggest first.
+    pub apps_open: Vec<OpenApp>,
 }
 
 impl PlanSummary {
@@ -114,16 +127,28 @@ pub struct Plan {
 
 impl Plan {
     /// The plan for a selection (see [`ScanResults::selected`]). Files that
-    /// need administrator rights are left out and only counted.
-    pub fn build(results: &ScanResults, choices: &HashMap<NodeId, bool>, policy: &Policy) -> Self {
+    /// need administrator rights, and files of apps that are `running`, are
+    /// left out and only counted.
+    pub fn build(
+        results: &ScanResults,
+        choices: &HashMap<NodeId, bool>,
+        policy: &Policy,
+        running: &RunningPrograms,
+    ) -> Self {
         let findings = &results.report().findings;
+        let open = open_apps(results, running);
         let mut items = Vec::new();
         let mut summary = PlanSummary::default();
         let mut groups: BTreeMap<u32, Tally> = BTreeMap::new();
+        let mut apps: BTreeMap<&str, Tally> = BTreeMap::new();
         for index in results.selected(choices) {
             let finding = &findings[index];
             if finding.needs_admin {
                 summary.needs_admin.add(finding.size_on_disk);
+                continue;
+            }
+            if let Some(&app) = open.get(finding.rule_id.as_str()) {
+                apps.entry(app).or_default().add(finding.size_on_disk);
                 continue;
             }
             let action = policy.action(finding.risk);
@@ -143,6 +168,15 @@ impl Plan {
                 size: tally.size,
             })
             .collect();
+        summary.apps_open = apps
+            .into_iter()
+            .map(|(name, tally)| OpenApp {
+                name: name.to_owned(),
+                files: tally.files,
+                size: tally.size,
+            })
+            .collect();
+        summary.apps_open.sort_by_key(|app| Reverse(app.size));
         Self {
             results: results.id(),
             items,
@@ -214,6 +248,8 @@ pub struct CleanReport {
     pub folders_removed: u64,
     /// Selected files left out because they need administrator rights.
     pub needs_admin: Tally,
+    /// Selected files left out because their app was open.
+    pub apps_open: Vec<OpenApp>,
     /// The history couldn't be written in full.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_error: Option<String>,
@@ -225,6 +261,9 @@ pub struct Cleaner<'a> {
     /// Where quarantined files go.
     pub store: &'a Store,
     pub history: &'a mut History,
+    /// What's running as the cleanup starts. Files of an app opened since
+    /// the plan was made are skipped.
+    pub running: &'a RunningPrograms,
 }
 
 impl Cleaner<'_> {
@@ -248,6 +287,7 @@ impl Cleaner<'_> {
             "a plan only runs against the results it was built from"
         );
         let findings = &results.report().findings;
+        let opened = open_apps(results, self.running);
         let mode = self.executor.mode();
         let cleanup = unix_millis(now);
         let mut batch = self.store.new_batch(now);
@@ -264,16 +304,22 @@ impl Cleaner<'_> {
                 break;
             }
             let finding = &findings[index];
-            let outcome = match action {
-                Action::Delete => self.executor.delete_file(&finding.snapshot),
-                Action::Quarantine { days } => self.executor.quarantine_file(
-                    self.store,
-                    &mut batch,
-                    &finding.snapshot,
-                    &finding.rule_id,
-                    Duration::from_secs(u64::from(days) * DAY),
-                    now,
-                ),
+            let outcome = if opened.contains_key(finding.rule_id.as_str()) {
+                Outcome::Skipped {
+                    reason: SkipReason::AppRunning,
+                }
+            } else {
+                match action {
+                    Action::Delete => self.executor.delete_file(&finding.snapshot),
+                    Action::Quarantine { days } => self.executor.quarantine_file(
+                        self.store,
+                        &mut batch,
+                        &finding.snapshot,
+                        &finding.rule_id,
+                        Duration::from_secs(u64::from(days) * DAY),
+                        now,
+                    ),
+                }
             };
             match (&outcome, action) {
                 (Outcome::Deleted { freed } | Outcome::WouldDelete { freed }, _) => {
@@ -330,6 +376,7 @@ impl Cleaner<'_> {
             not_started: total - done,
             folders_removed,
             needs_admin: plan.summary.needs_admin,
+            apps_open: plan.summary.apps_open.clone(),
             history_error: None,
         };
         self.history.cleanup(
@@ -366,6 +413,19 @@ impl Cleaner<'_> {
         }
         removed
     }
+}
+
+/// The rules whose app is running, with the app's name.
+fn open_apps<'r>(results: &'r ScanResults, running: &RunningPrograms) -> HashMap<&'r str, &'r str> {
+    results
+        .report()
+        .rules
+        .iter()
+        .filter_map(|rule| {
+            let app = rule.app.as_ref().filter(|app| running.is_running(app))?;
+            Some((rule.rule_id.as_str(), app.name.as_str()))
+        })
+        .collect()
 }
 
 /// Adds every folder between `file` and its rule location `root` (which

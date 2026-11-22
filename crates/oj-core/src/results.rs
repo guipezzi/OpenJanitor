@@ -576,6 +576,7 @@ mod tests {
             risk,
             recommended: true,
             needs_admin,
+            app: None,
             status: RuleStatus::Scanned,
             roots: Vec::new(),
             findings: 0,
