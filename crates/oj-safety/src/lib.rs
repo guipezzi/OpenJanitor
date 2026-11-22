@@ -25,4 +25,4 @@ pub use exec::{Executor, Mode, Outcome, SkipReason};
 pub use path::{NormPath, PathError};
 pub use snapshot::FileSnapshot;
 pub use system::{DiscoverError, SystemPaths};
-pub use walk::{WalkStats, walk_files};
+pub use walk::{CancelToken, WalkStats, walk_files};

@@ -6,10 +6,13 @@
 #![forbid(unsafe_code)]
 
 pub mod age;
+pub mod results;
 pub mod rule;
 pub mod scan;
 pub mod vars;
 
+pub use oj_safety::CancelToken;
+pub use results::{ChildPage, NodeId, NodeKind, NodeView, ScanResults};
 pub use rule::{CompiledRule, Level, Risk, Rule, RuleError, RuleSet};
-pub use scan::{Finding, RuleReport, RuleStatus, ScanOptions, ScanReport, Scanner};
+pub use scan::{Finding, RuleReport, RuleStatus, ScanOptions, ScanProgress, ScanReport, Scanner};
 pub use vars::{EnvVars, Vars};

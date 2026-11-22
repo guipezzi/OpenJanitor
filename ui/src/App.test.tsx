@@ -1,12 +1,20 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
-import { canScan, scan, type RuleReport, type ScanSummary } from './lib/scan'
+import {
+  cancelScan,
+  canScan,
+  scan,
+  type RuleReport,
+  type ScanOutcome,
+  type ScanOverview,
+} from './lib/scan'
 
 vi.mock('./lib/scan', () => ({
   canScan: vi.fn(() => true),
   scan: vi.fn(),
+  cancelScan: vi.fn(() => Promise.resolve()),
 }))
 
 function rule(overrides: Partial<RuleReport>): RuleReport {
@@ -37,7 +45,9 @@ function rule(overrides: Partial<RuleReport>): RuleReport {
   }
 }
 
-const summary: ScanSummary = {
+const overview: ScanOverview = {
+  scan_id: 1,
+  categories: [],
   level: 'simple',
   findings_total: 1147,
   size_on_disk_total: 208_037_478,
@@ -58,6 +68,7 @@ describe('App', () => {
   beforeEach(() => {
     vi.mocked(canScan).mockReturnValue(true)
     vi.mocked(scan).mockReset()
+    vi.mocked(cancelScan).mockClear()
   })
 
   it('starts idle and promises not to delete anything', () => {
@@ -69,19 +80,53 @@ describe('App', () => {
   })
 
   it('runs a simple scan and shows what each rule found', async () => {
-    vi.mocked(scan).mockResolvedValue(summary)
+    vi.mocked(scan).mockResolvedValue({ status: 'completed', overview })
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
 
     expect(await screen.findByText('198.4 MB')).toBeInTheDocument()
-    expect(scan).toHaveBeenCalledWith('simple')
+    expect(scan).toHaveBeenCalledWith('simple', expect.any(Function))
     expect(screen.getByText('can be freed from 1,147 files')).toBeInTheDocument()
     expect(screen.getByText('User temporary files')).toBeInTheDocument()
     expect(screen.getByText('Not found on this PC')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Needs administrator rights' })).toBeInTheDocument()
     expect(screen.getByText(/Nothing was deleted/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scan again' })).toBeEnabled()
+  })
+
+  it('shows progress while scanning and can cancel', async () => {
+    let finish: (outcome: ScanOutcome) => void = () => {}
+    vi.mocked(scan).mockImplementation((_level, onProgress) => {
+      onProgress({
+        rule_index: 0,
+        rule_count: 4,
+        rule_id: 'windows.temp.user',
+        rule_name: 'User temporary files',
+        files_checked: 1234,
+        findings: 10,
+        size_on_disk: 1536 * 1024,
+      })
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
+
+    expect(await screen.findByText('Checking User temporary files')).toBeInTheDocument()
+    expect(screen.getByText('Step 1 of 4 · 1,234 files checked')).toBeInTheDocument()
+    expect(screen.getByText('Found so far: 1.5 MB')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Scanning/ })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(cancelScan).toHaveBeenCalled()
+    expect(await screen.findByRole('button', { name: 'Cancelling…' })).toBeDisabled()
+
+    await act(async () => finish({ status: 'cancelled' }))
+    expect(screen.getByText('Scan cancelled. Nothing was changed.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan' })).toBeEnabled()
   })
 
   it('shows the error when the scan fails', async () => {
