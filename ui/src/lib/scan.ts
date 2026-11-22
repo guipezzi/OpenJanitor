@@ -20,6 +20,7 @@ export interface WalkStats {
 export interface RuleReport {
   rule_id: string
   name: string
+  description: string
   category: string
   level: Level
   risk: Risk
@@ -115,4 +116,9 @@ export function scanChildren(
   limit: number,
 ): Promise<ChildPage> {
   return invoke<ChildPage>('scan_children', { scanId, nodeId, offset, limit })
+}
+
+/** Shows a location, folder, or file from the results in File Explorer. */
+export function revealInExplorer(scanId: number, nodeId: number): Promise<void> {
+  return invoke('reveal_in_explorer', { scanId, nodeId })
 }

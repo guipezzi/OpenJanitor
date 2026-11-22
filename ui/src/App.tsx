@@ -2,20 +2,11 @@ import { LoaderCircle, Search, ShieldCheck, Sparkles, TriangleAlert } from 'luci
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Logo } from '@/components/logo'
-import { ResultsTable } from '@/components/results-table'
+import { AppSidebar } from '@/components/app-sidebar'
+import { ResultsView } from '@/components/results-view'
 import { ScanProgressPanel } from '@/components/scan-progress'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
 import { formatBytes } from '@/lib/format'
 import {
   cancelScan,
@@ -71,73 +62,63 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-muted/40">
-      <header className="border-b bg-background">
-        <div className="mx-auto flex max-w-5xl items-center gap-3 px-6 py-4">
-          <Logo />
-          <div>
-            <h1 className="text-lg leading-tight font-semibold">OpenJanitor</h1>
-            <p className="text-sm text-muted-foreground">{t('app.tagline')}</p>
-          </div>
-          <Badge variant="outline" className="ml-auto">
-            {t('app.preview')}
-          </Badge>
-        </div>
-      </header>
+    <div className="flex h-screen bg-muted/40">
+      <AppSidebar />
+      <main id="clean" className="min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex min-h-full max-w-6xl flex-col space-y-6 px-6 pt-6">
+          <header className="flex flex-wrap items-start gap-4">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-xl font-semibold">{t('scan.title')}</h2>
+              <p className="text-sm text-muted-foreground">{t('scan.description')}</p>
+            </div>
+            <Button size="lg" onClick={runScan} disabled={scanning}>
+              {scanning ? <LoaderCircle className="animate-spin" /> : <Search />}
+              {scanning ? t('scan.scanning') : overview ? t('scan.again') : t('scan.start')}
+            </Button>
+          </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-8">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('scan.title')}</CardTitle>
-            <CardDescription>{t('scan.description')}</CardDescription>
-            <CardAction>
-              <Button size="lg" onClick={runScan} disabled={scanning}>
-                {scanning ? <LoaderCircle className="animate-spin" /> : <Search />}
-                {scanning ? t('scan.scanning') : overview ? t('scan.again') : t('scan.start')}
-              </Button>
-            </CardAction>
-          </CardHeader>
+          {error && (
+            <Alert variant="destructive">
+              <TriangleAlert />
+              <AlertTitle>{t('scan.error')}</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
 
-          <CardContent className="space-y-6">
-            {error && (
-              <Alert variant="destructive">
-                <TriangleAlert />
-                <AlertTitle>{t('scan.error')}</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-
-            {scanning ? (
-              <ScanProgressPanel progress={progress} cancelling={cancelling} onCancel={stopScan} />
-            ) : overview ? (
-              <>
-                <div className="flex items-center gap-4 rounded-xl bg-primary/5 p-5">
-                  <Sparkles className="size-8 shrink-0 text-primary" />
-                  <div>
-                    <p className="text-3xl font-semibold tabular-nums">
-                      {formatBytes(overview.size_on_disk_total, i18n.language)}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {t('scan.summary', { count: overview.findings_total })}
-                    </p>
-                  </div>
+          {scanning ? (
+            <ScanProgressPanel progress={progress} cancelling={cancelling} onCancel={stopScan} />
+          ) : overview ? (
+            <>
+              <div className="flex items-center gap-4 rounded-xl border bg-card p-5">
+                <Sparkles className="size-8 shrink-0 text-primary" />
+                <div className="flex-1">
+                  <p className="text-3xl font-semibold tabular-nums">
+                    {formatBytes(overview.size_on_disk_total, i18n.language)}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {t('scan.summary', { count: overview.findings_total })}
+                  </p>
                 </div>
-                <ResultsTable rules={overview.rules} />
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <p className="hidden max-w-56 items-center gap-2 text-xs text-muted-foreground md:flex">
                   <ShieldCheck className="size-4 shrink-0" />
                   {t('scan.nothingDeleted')}
                 </p>
-              </>
-            ) : (
-              !error && (
-                <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">
-                  <ShieldCheck className="size-10 text-primary" />
-                  {notice ?? t('scan.idle')}
-                </div>
-              )
-            )}
-          </CardContent>
-        </Card>
+              </div>
+              {overview.categories.length > 0 ? (
+                <ResultsView key={overview.scan_id} overview={overview} />
+              ) : (
+                <p className="pb-6 text-sm text-muted-foreground">{t('scan.nothingFound')}</p>
+              )}
+            </>
+          ) : (
+            !error && (
+              <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed bg-card py-12 text-center text-sm text-muted-foreground">
+                <ShieldCheck className="size-10 text-primary" />
+                {notice ?? t('scan.idle')}
+              </div>
+            )
+          )}
+        </div>
       </main>
     </div>
   )

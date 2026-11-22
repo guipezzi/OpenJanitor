@@ -1,6 +1,9 @@
 //! Commands the UI can call. Each one is a narrow, read-only entry point into
 //! the core crates (PLANNING.md §5.2).
 
+use std::fs;
+use std::os::windows::process::CommandExt;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use oj_core::{
@@ -54,6 +57,36 @@ pub fn scan_children(
     limit: usize,
 ) -> Result<ChildPage, String> {
     state.children(scan_id, node_id, offset, limit)
+}
+
+/// Shows a location, folder, or file from the scan results in File
+/// Explorer: folders open, files are highlighted in their folder. The path
+/// comes from the results, never from the UI.
+#[tauri::command]
+pub fn reveal_in_explorer(
+    state: State<'_, AppState>,
+    scan_id: u64,
+    node_id: NodeId,
+) -> Result<(), String> {
+    let path = state.node_path(scan_id, node_id)?;
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|_| "This item no longer exists.".to_string())?;
+    let windows = SystemPaths::discover().map_err(|e| e.to_string())?.windows;
+
+    // Explorer treats commas as separators, so the path is always quoted.
+    // Rust only quotes arguments with spaces, so pass it raw. Windows paths
+    // can't contain quotes.
+    let quoted = format!("\"{}\"", path.display());
+    let argument = if metadata.is_dir() {
+        quoted
+    } else {
+        format!("/select,{quoted}")
+    };
+    Command::new(windows.join("explorer.exe"))
+        .raw_arg(argument)
+        .spawn()
+        .map_err(|e| format!("Couldn't open File Explorer: {e}"))?;
+    Ok(())
 }
 
 fn run_scan(
