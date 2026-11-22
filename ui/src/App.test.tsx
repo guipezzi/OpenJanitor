@@ -1,11 +1,14 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import {
   cancelScan,
   canScan,
+  revealInExplorer,
   scan,
+  scanChildren,
+  type NodeView,
   type RuleReport,
   type ScanOutcome,
   type ScanOverview,
@@ -15,12 +18,15 @@ vi.mock('./lib/scan', () => ({
   canScan: vi.fn(() => true),
   scan: vi.fn(),
   cancelScan: vi.fn(() => Promise.resolve()),
+  scanChildren: vi.fn(),
+  revealInExplorer: vi.fn(() => Promise.resolve()),
 }))
 
 function rule(overrides: Partial<RuleReport>): RuleReport {
   return {
     rule_id: 'windows.temp.user',
     name: 'User temporary files',
+    description: "Files programs create while running. They're recreated when needed.",
     category: 'temporary-files',
     level: 'simple',
     risk: 'low',
@@ -45,12 +51,40 @@ function rule(overrides: Partial<RuleReport>): RuleReport {
   }
 }
 
+function node(id: number, kind: NodeView['kind'], name: string, files: number, size: number, extra: Partial<NodeView> = {}): NodeView {
+  return {
+    id,
+    kind,
+    name,
+    needs_admin: false,
+    size_on_disk: size,
+    file_count: files,
+    last_modified: 1_763_740_800,
+    has_children: kind !== 'file',
+    ...extra,
+  }
+}
+
+const TEMP = 'C:\\Users\\test\\AppData\\Local\\Temp'
+const userTemp = node(2, 'rule', 'User temporary files', 1100, 200_000_000, {
+  rule_id: 'windows.temp.user',
+  risk: 'low',
+})
+const systemTemp = node(3, 'rule', 'Windows temporary files', 47, 8_037_478, {
+  rule_id: 'windows.temp.system',
+  risk: 'low',
+  needs_admin: true,
+})
+const dumps = node(5, 'rule', 'Crash dumps', 10, 1_048_576, {
+  rule_id: 'windows.crash-dumps.user',
+  risk: 'medium',
+})
+
 const overview: ScanOverview = {
   scan_id: 1,
-  categories: [],
   level: 'simple',
-  findings_total: 1147,
-  size_on_disk_total: 208_037_478,
+  findings_total: 1157,
+  size_on_disk_total: 209_086_054,
   rules: [
     rule({ findings: 1100, size_on_disk: 200_000_000 }),
     rule({
@@ -60,15 +94,48 @@ const overview: ScanOverview = {
       findings: 47,
       size_on_disk: 8_037_478,
     }),
-    rule({ rule_id: 'windows.crash-dumps.user', name: 'Crash dumps', status: 'no_locations' }),
+    rule({ rule_id: 'windows.crash-dumps.user', name: 'Crash dumps', category: 'crash-reports', risk: 'medium', findings: 10 }),
+    rule({ rule_id: 'windows.thumbnail-cache', name: 'Thumbnail cache', status: 'no_locations' }),
+  ],
+  categories: [
+    node(1, 'category', 'temporary-files', 1147, 208_037_478, {
+      needs_admin: true,
+      children: [userTemp, systemTemp],
+    }),
+    node(4, 'category', 'crash-reports', 10, 1_048_576, { children: [dumps] }),
   ],
 }
+
+const setupFolder = node(10, 'folder', 'setup', 2, 300, {
+  rule_id: 'windows.temp.user',
+  risk: 'low',
+  path: `${TEMP}\\setup`,
+})
+const oldFile = node(11, 'file', 'old.tmp', 1, 100, {
+  rule_id: 'windows.temp.user',
+  risk: 'low',
+  path: `${TEMP}\\old.tmp`,
+  evidence: [`Found in ${TEMP} by rule windows.temp.user`, 'Last modified 3 days ago'],
+})
+
+async function scanned() {
+  vi.mocked(scan).mockResolvedValue({ status: 'completed', overview })
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
+  await screen.findByText('199.4 MB')
+}
+
+/** The selection summary at the bottom. */
+const footer = () => screen.getByText(/files? selected ·/)
 
 describe('App', () => {
   beforeEach(() => {
     vi.mocked(canScan).mockReturnValue(true)
     vi.mocked(scan).mockReset()
     vi.mocked(cancelScan).mockClear()
+    vi.mocked(revealInExplorer).mockClear()
+    vi.mocked(scanChildren).mockReset()
+    vi.mocked(scanChildren).mockResolvedValue({ items: [setupFolder, oldFile], total: 2 })
   })
 
   it('starts idle and promises not to delete anything', () => {
@@ -79,20 +146,63 @@ describe('App', () => {
     expect(scan).not.toHaveBeenCalled()
   })
 
-  it('runs a simple scan and shows what each rule found', async () => {
-    vi.mocked(scan).mockResolvedValue({ status: 'completed', overview })
-    render(<App />)
+  it('shows the results as a tree, with nothing selected', async () => {
+    await scanned()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
-
-    expect(await screen.findByText('198.4 MB')).toBeInTheDocument()
     expect(scan).toHaveBeenCalledWith('simple', expect.any(Function))
-    expect(screen.getByText('can be freed from 1,147 files')).toBeInTheDocument()
+    expect(screen.getByText('can be freed from 1,157 files')).toBeInTheDocument()
+    expect(screen.getByText('Temporary files')).toBeInTheDocument()
+    expect(screen.getByText('Crash reports')).toBeInTheDocument()
     expect(screen.getByText('User temporary files')).toBeInTheDocument()
-    expect(screen.getByText('Not found on this PC')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Needs administrator rights' })).toBeInTheDocument()
-    expect(screen.getByText(/Nothing was deleted/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Scan again' })).toBeEnabled()
+    expect(screen.getByText('Also checked, nothing to clean: Thumbnail cache')).toBeInTheDocument()
+    expect(screen.getByText('Nothing selected')).toBeInTheDocument()
+    for (const box of screen.getAllByRole('checkbox')) {
+      expect(box).toHaveAttribute('aria-checked', 'false')
+    }
+  })
+
+  it('selects the low-risk rules when asked, and clears them', async () => {
+    await scanned()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select recommended' }))
+    expect(footer()).toHaveTextContent('1,147 files selected · 198.4 MB')
+    expect(screen.getByRole('checkbox', { name: 'Select Temporary files' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('checkbox', { name: 'Select Crash dumps' })).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }))
+    expect(screen.getByText('Nothing selected')).toBeInTheDocument()
+  })
+
+  it('loads a rule on demand and shows partial selection', async () => {
+    await scanned()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select User temporary files' }))
+    expect(footer()).toHaveTextContent('1,100 files selected')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand User temporary files' }))
+    expect(await screen.findByText('setup')).toBeInTheDocument()
+    expect(scanChildren).toHaveBeenCalledWith(1, 2, 0, 200)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select setup' }))
+    expect(footer()).toHaveTextContent('1,098 files selected')
+    expect(screen.getByRole('checkbox', { name: 'Select User temporary files' })).toHaveAttribute('aria-checked', 'mixed')
+    expect(screen.getByRole('checkbox', { name: 'Select old.tmp' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('explains an item and opens it in Explorer', async () => {
+    await scanned()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand User temporary files' }))
+    fireEvent.click(await screen.findByText('old.tmp'))
+
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    expect(within(details).getByText('File')).toBeInTheDocument()
+    expect(within(details).getByText(/Files programs create while running/)).toBeInTheDocument()
+    expect(within(details).getByText('Last modified 3 days ago')).toBeInTheDocument()
+    expect(within(details).getByText(`${TEMP}\\old.tmp`)).toBeInTheDocument()
+
+    fireEvent.click(within(details).getByRole('button', { name: 'Open in Explorer' }))
+    expect(revealInExplorer).toHaveBeenCalledWith(1, 11)
   })
 
   it('shows progress while scanning and can cancel', async () => {

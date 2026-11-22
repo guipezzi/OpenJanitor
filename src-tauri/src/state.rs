@@ -1,6 +1,7 @@
 //! What the app remembers between commands: the results of the last scan,
 //! and the scan that's running, if any.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -106,16 +107,39 @@ impl AppState {
         offset: usize,
         limit: usize,
     ) -> Result<ChildPage, String> {
+        self.with_results(scan_id, |results| {
+            results
+                .children(node, offset, limit.min(MAX_PAGE))
+                .ok_or_else(|| no_item(node))
+        })
+    }
+
+    /// The path of a location, folder, or file node from scan `scan_id`.
+    pub fn node_path(&self, scan_id: u64, node: NodeId) -> Result<PathBuf, String> {
+        self.with_results(scan_id, |results| {
+            results
+                .path(node)
+                .map(Path::to_path_buf)
+                .ok_or_else(|| no_item(node))
+        })
+    }
+
+    fn with_results<T>(
+        &self,
+        scan_id: u64,
+        f: impl FnOnce(&ScanResults) -> Result<T, String>,
+    ) -> Result<T, String> {
         let session = lock(&self.session);
         let session = session
             .as_ref()
             .filter(|session| session.id == scan_id)
             .ok_or("These results are out of date. Scan again.")?;
-        session
-            .results
-            .children(node, offset, limit.min(MAX_PAGE))
-            .ok_or_else(|| format!("There's no item {node} in these results."))
+        f(&session.results)
     }
+}
+
+fn no_item(node: NodeId) -> String {
+    format!("There's no item {node} in these results.")
 }
 
 #[cfg(test)]
@@ -169,9 +193,13 @@ mod tests {
         let first = completed_id(state.finish_scan(Ok(report(false))));
         let error = state.children(first, 0, 0, 10).unwrap_err();
         assert!(error.contains("no item"), "{error}");
+        let error = state.node_path(first, 0).unwrap_err();
+        assert!(error.contains("no item"), "{error}");
 
         state.begin_scan().unwrap();
         let out_of_date = state.children(first, 0, 0, 10).unwrap_err();
+        assert!(out_of_date.contains("out of date"), "{out_of_date}");
+        let out_of_date = state.node_path(first, 0).unwrap_err();
         assert!(out_of_date.contains("out of date"), "{out_of_date}");
         let second = completed_id(state.finish_scan(Ok(report(false))));
         assert_eq!(second, first + 1);

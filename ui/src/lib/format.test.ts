@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatBytes, formatCount } from './format'
+import { formatBytes, formatCount, formatDate } from './format'
 
 describe('formatBytes', () => {
   it('shows small sizes in bytes', () => {
@@ -21,6 +21,13 @@ describe('formatBytes', () => {
 
   it('follows the locale', () => {
     expect(formatBytes(1536, 'pt-BR')).toBe('1,5 KB')
+  })
+})
+
+describe('formatDate', () => {
+  it('shows a Unix timestamp as a local date and time', () => {
+    expect(formatDate(1_763_740_800, 'en', 'UTC')).toBe('Nov 21, 2025, 4:00 PM')
+    expect(formatDate(1_763_740_800, 'pt-BR', 'UTC')).toBe('21 de nov. de 2025, 16:00')
   })
 })
 

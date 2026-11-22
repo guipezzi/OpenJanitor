@@ -69,6 +69,8 @@ pub enum RuleStatus {
 pub struct RuleReport {
     pub rule_id: String,
     pub name: String,
+    /// What the rule cleans, in plain language, for the details panel.
+    pub description: String,
     pub category: String,
     pub level: Level,
     pub risk: Risk,
@@ -184,6 +186,7 @@ impl Scanner<'_> {
         let mut report = RuleReport {
             rule_id: rule.id.clone(),
             name: rule.name.clone(),
+            description: rule.description.clone(),
             category: rule.category.clone(),
             level: rule.level,
             risk: rule.risk,

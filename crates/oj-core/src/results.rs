@@ -167,6 +167,11 @@ impl ScanResults {
         })
     }
 
+    /// The path of a location, folder, or file node.
+    pub fn path(&self, id: NodeId) -> Option<&Path> {
+        self.nodes.get(id as usize)?.path.as_deref()
+    }
+
     /// Every finding inside `id`. Empty if there's no such node.
     pub fn findings_under(&self, id: NodeId) -> Vec<&Finding> {
         let mut found = Vec::new();
@@ -418,6 +423,7 @@ mod tests {
         RuleReport {
             rule_id: id.into(),
             name: format!("Rule {id}"),
+            description: format!("What {id} cleans"),
             category: category.into(),
             level: Level::Simple,
             risk,
@@ -558,6 +564,12 @@ mod tests {
         );
         assert_eq!(names(&all_children(&results, inside[0].id)), ["f_1", "f_2"]);
         assert_eq!(results.findings_under(inside[0].id).len(), 2);
+        assert_eq!(
+            results.path(inside[0].id),
+            Some(Path::new(TEMP).join(r"Default\Cache\Cache_Data").as_path())
+        );
+        assert_eq!(results.path(rule.id), None, "rules have no single path");
+        assert_eq!(results.path(9_999), None);
     }
 
     #[test]

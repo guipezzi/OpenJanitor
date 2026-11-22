@@ -21,3 +21,10 @@ export function formatBytes(bytes: number, locale: string): string {
 export function formatCount(count: number, locale: string): string {
   return new Intl.NumberFormat(locale).format(count)
 }
+
+/** A date and time from seconds since the Unix epoch. */
+export function formatDate(seconds: number, locale: string, timeZone?: string): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(
+    new Date(seconds * 1000),
+  )
+}

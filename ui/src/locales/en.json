@@ -3,6 +3,10 @@
     "tagline": "Free, open source disk cleaner",
     "preview": "Preview"
   },
+  "nav": {
+    "label": "Main",
+    "clean": "Clean"
+  },
   "scan": {
     "title": "Simple clean",
     "description": "Finds temporary files and caches that Windows and your apps recreate when they need them.",
@@ -23,16 +27,54 @@
     "notInApp": "Scanning works in the desktop app. Start it with \"npm run dev\" from the project folder.",
     "summary_one": "can be freed from {{count, number}} file",
     "summary_other": "can be freed from {{count, number}} files",
-    "nothingDeleted": "Nothing was deleted. Cleaning arrives in a later version."
+    "nothingDeleted": "Nothing was deleted. Cleaning arrives in a later version.",
+    "nothingFound": "Nothing to clean right now. Everything this scan looks for is already tidy."
   },
   "results": {
-    "item": "Item",
-    "risk": "Risk",
-    "files": "Files",
-    "size": "Size",
-    "noLocations": "Not found on this PC",
-    "notDetected": "App not installed",
+    "label": "Scan results",
+    "selectRecommended": "Select recommended",
+    "recommendedHint": "Recommended means low-risk items only. Nothing is selected until you choose.",
+    "clearSelection": "Clear selection",
+    "selected_one": "{{count, number}} file selected · {{size}}",
+    "selected_other": "{{count, number}} files selected · {{size}}",
+    "nothingSelected": "Nothing selected",
+    "cleaningLater": "Cleaning arrives in a later version.",
+    "files_one": "{{count, number}} file",
+    "files_other": "{{count, number}} files",
+    "expand": "Expand {{name}}",
+    "collapse": "Collapse {{name}}",
+    "select": "Select {{name}}",
+    "showMore_one": "Show {{count, number}} more",
+    "showMore_other": "Show {{count, number}} more",
+    "loading": "Loading…",
+    "loadError": "Couldn't load these items: {{error}}",
+    "alsoChecked": "Also checked, nothing to clean: {{rules}}",
     "needsAdmin": "Needs administrator rights"
+  },
+  "details": {
+    "label": "Details",
+    "empty": "Select an item to see what it is and why it was found.",
+    "size": "Size",
+    "files": "Files",
+    "modified": "Last modified",
+    "newest": "Newest file",
+    "rule": "Rule",
+    "location": "Location",
+    "why": "Why it's here",
+    "adminNote": "Cleaning this needs administrator rights. You'll be asked once per cleanup.",
+    "openInExplorer": "Open in Explorer",
+    "kind": {
+      "category": "Category",
+      "rule": "Rule",
+      "location": "Location",
+      "folder": "Folder",
+      "file": "File"
+    }
+  },
+  "categories": {
+    "temporary-files": "Temporary files",
+    "crash-reports": "Crash reports",
+    "system-caches": "System caches"
   },
   "risk": {
     "low": "Low",

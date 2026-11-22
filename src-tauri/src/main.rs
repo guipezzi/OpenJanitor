@@ -17,6 +17,7 @@ fn main() {
             commands::scan,
             commands::cancel_scan,
             commands::scan_children,
+            commands::reveal_in_explorer,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenJanitor");
