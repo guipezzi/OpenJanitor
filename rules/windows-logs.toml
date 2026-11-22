@@ -1,0 +1,20 @@
+# Old log files. Format: PLANNING.md §5.3.
+#
+# Logs help diagnose problems, so this rule is medium risk: by default the
+# files go to quarantine instead of being deleted (PLANNING.md §4.5), and
+# only logs untouched for 30 days are found.
+
+# Measured Boot logs are left alone: security tools such as Device Health
+# Attestation read them.
+[[rule]]
+id          = "windows.logs.old"
+category    = "logs"
+level       = "simple"
+risk        = "medium"
+needs_admin = true
+paths       = ['%WINDIR%\Logs']
+include     = ["**/*.log", "**/*.etl", "CBS/CbsPersist_*.cab"]
+exclude     = ["MeasuredBoot/**"]
+min_age     = "30d"
+name        = "Old Windows log files"
+description = "Logs from Windows Update, setup, and system repairs that haven't changed in 30 days. They only matter when troubleshooting an old problem."

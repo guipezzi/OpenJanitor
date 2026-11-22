@@ -1,0 +1,129 @@
+# Browser caches. Format: PLANNING.md §5.3.
+#
+# Cache folders only. Cookies, passwords, history, bookmarks, and settings
+# are never matched here, and the deny list in oj-safety protects those
+# files by name anyway (PLANNING.md §4.2).
+#
+# Chromium browsers (Chrome, Edge, Brave) keep one folder per profile
+# ("Default", "Profile 1", ...) inside "User Data", so the patterns start
+# with "*/" for the profile. Shader caches sit directly in "User Data".
+
+[[rule]]
+id          = "browser.chrome.cache"
+category    = "browser-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+detect      = '%LOCALAPPDATA%\Google\Chrome\User Data'
+paths       = ['%LOCALAPPDATA%\Google\Chrome\User Data']
+include     = [
+  "*/Cache/**",
+  "*/Code Cache/**",
+  "*/GPUCache/**",
+  "*/DawnGraphiteCache/**",
+  "*/DawnWebGPUCache/**",
+  "GrShaderCache/**",
+  "GraphiteDawnCache/**",
+  "ShaderCache/**",
+  "GPUPersistentCache/**",
+]
+min_age     = "24h"
+name        = "Google Chrome cache"
+description = "Copies of web pages, images, and scripts Chrome saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
+
+[[rule]]
+id          = "browser.edge.cache"
+category    = "browser-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+detect      = '%LOCALAPPDATA%\Microsoft\Edge\User Data'
+paths       = ['%LOCALAPPDATA%\Microsoft\Edge\User Data']
+include     = [
+  "*/Cache/**",
+  "*/Code Cache/**",
+  "*/GPUCache/**",
+  "*/DawnGraphiteCache/**",
+  "*/DawnWebGPUCache/**",
+  "GrShaderCache/**",
+  "GraphiteDawnCache/**",
+  "ShaderCache/**",
+  "GPUPersistentCache/**",
+]
+min_age     = "24h"
+name        = "Microsoft Edge cache"
+description = "Copies of web pages, images, and scripts Edge saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
+
+[[rule]]
+id          = "browser.brave.cache"
+category    = "browser-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+detect      = '%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data'
+paths       = ['%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data']
+include     = [
+  "*/Cache/**",
+  "*/Code Cache/**",
+  "*/GPUCache/**",
+  "*/DawnGraphiteCache/**",
+  "*/DawnWebGPUCache/**",
+  "GrShaderCache/**",
+  "GraphiteDawnCache/**",
+  "ShaderCache/**",
+  "GPUPersistentCache/**",
+]
+min_age     = "24h"
+name        = "Brave cache"
+description = "Copies of web pages, images, and scripts Brave saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
+
+# Opera keeps its page cache in Local and its profile (with the code and GPU
+# caches) in Roaming. Newer versions may add a profile folder, hence "*/".
+# "Service Worker" storage is left alone: offline web apps rely on it.
+[[rule]]
+id          = "browser.opera.cache"
+category    = "browser-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+detect      = '%APPDATA%\Opera Software'
+paths       = [
+  '%LOCALAPPDATA%\Opera Software\Opera Stable',
+  '%LOCALAPPDATA%\Opera Software\Opera GX Stable',
+  '%APPDATA%\Opera Software\Opera Stable',
+  '%APPDATA%\Opera Software\Opera GX Stable',
+]
+include     = [
+  "Cache/**",
+  "Code Cache/**",
+  "GPUCache/**",
+  "*/Cache/**",
+  "*/Code Cache/**",
+  "*/GPUCache/**",
+  "GrShaderCache/**",
+  "ShaderCache/**",
+]
+min_age     = "24h"
+name        = "Opera cache"
+description = "Copies of web pages, images, and scripts Opera and Opera GX saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."
+
+# Firefox splits each profile in two: settings, passwords, and history in
+# Roaming, and caches in Local. Only the Local half is scanned.
+[[rule]]
+id          = "browser.firefox.cache"
+category    = "browser-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+detect      = '%LOCALAPPDATA%\Mozilla\Firefox\Profiles'
+paths       = ['%LOCALAPPDATA%\Mozilla\Firefox\Profiles']
+include     = [
+  "*/cache2/**",
+  "*/startupCache/**",
+  "*/thumbnails/**",
+  "*/jumpListCache/**",
+  "*/shader-cache/**",
+]
+min_age     = "24h"
+name        = "Firefox cache"
+description = "Copies of web pages, images, and scripts Firefox saved to load sites faster. Sites may load a little slower the first time afterward. Passwords, history, and cookies aren't touched."

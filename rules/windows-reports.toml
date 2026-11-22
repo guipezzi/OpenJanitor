@@ -1,0 +1,60 @@
+# Crash dumps and error reports. Format: PLANNING.md §5.3.
+#
+# They're only useful for diagnosing a crash that already happened. The
+# system folders are allowed by hardcoded exceptions in oj-safety's deny
+# list (PLANNING.md §4.2); rule files can't add new ones.
+
+[[rule]]
+id          = "windows.crash-dumps.user"
+category    = "crash-reports"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = ['%LOCALAPPDATA%\CrashDumps']
+include     = ["*.dmp"]
+min_age     = "24h"
+name        = "Application crash dumps"
+description = "Memory dumps saved when a program crashed. They're only useful for debugging that crash."
+
+# MEMORY.DMP is a single file, so it's listed as a location of its own.
+[[rule]]
+id          = "windows.crash-dumps.system"
+category    = "crash-reports"
+level       = "simple"
+risk        = "low"
+needs_admin = true
+paths       = [
+  '%WINDIR%\Minidump',
+  '%WINDIR%\LiveKernelReports',
+  '%WINDIR%\MEMORY.DMP',
+]
+include     = ["**/*.dmp"]
+min_age     = "24h"
+name        = "System crash dumps"
+description = "Memory dumps Windows saved after a blue screen or a driver hang. They're only useful for diagnosing that crash and can take several gigabytes."
+
+[[rule]]
+id          = "windows.error-reports.user"
+category    = "crash-reports"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = ['%LOCALAPPDATA%\Microsoft\Windows\WER']
+include     = ["ReportArchive/**", "ReportQueue/**"]
+min_age     = "24h"
+name        = "Your error reports"
+description = "Reports Windows Error Reporting kept about programs that stopped working. They were already sent or are no longer needed."
+
+[[rule]]
+id          = "windows.error-reports.system"
+category    = "crash-reports"
+level       = "simple"
+risk        = "low"
+needs_admin = true
+paths       = [
+  '%PROGRAMDATA%\Microsoft\Windows\WER\ReportArchive',
+  '%PROGRAMDATA%\Microsoft\Windows\WER\ReportQueue',
+]
+min_age     = "24h"
+name        = "System error reports"
+description = "Reports Windows Error Reporting kept for all users about programs and services that stopped working."

@@ -1,0 +1,109 @@
+# App caches. Format: PLANNING.md §5.3.
+#
+# These apps are built on Electron or WebView2, so their caches use the
+# same folder names as Chromium browsers. Only those cache folders are
+# matched: never chats, accounts, settings, or local storage.
+#
+# Spotify is left out on purpose: its downloaded songs can share a folder
+# with the cache, and the layout hasn't been verified on a real install.
+
+[[rule]]
+id          = "app.discord.cache"
+category    = "app-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+detect      = '%APPDATA%\discord'
+paths       = [
+  '%APPDATA%\discord',
+  '%APPDATA%\discordptb',
+  '%APPDATA%\discordcanary',
+]
+include     = [
+  "Cache/**",
+  "Code Cache/**",
+  "GPUCache/**",
+  "DawnGraphiteCache/**",
+  "DawnWebGPUCache/**",
+  "GrShaderCache/**",
+  "ShaderCache/**",
+  "GPUPersistentCache/**",
+]
+min_age     = "24h"
+name        = "Discord cache"
+description = "Images, videos, and scripts Discord saved to load faster. Messages and settings aren't touched."
+
+# New Teams (the Microsoft Store app) runs its interface in WebView2. Only
+# that WebView2 profile's cache folders are matched, not the rest of the
+# MSTeams folder, so you stay signed in.
+[[rule]]
+id          = "app.teams.cache"
+category    = "app-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+detect      = '%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe'
+paths       = ['%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\EBWebView']
+include     = [
+  "*/Cache/**",
+  "*/Code Cache/**",
+  "*/GPUCache/**",
+  "*/DawnGraphiteCache/**",
+  "*/DawnWebGPUCache/**",
+  "GrShaderCache/**",
+  "GraphiteDawnCache/**",
+  "ShaderCache/**",
+]
+min_age     = "24h"
+name        = "Microsoft Teams cache"
+description = "Images and scripts Teams saved to load faster. Chats, files, and your sign-in aren't touched."
+
+[[rule]]
+id          = "app.slack.cache"
+category    = "app-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = [
+  '%APPDATA%\Slack',
+  '%LOCALAPPDATA%\Packages\91750D7E.Slack_8she8kybcnzg4\LocalCache\Roaming\Slack',
+]
+include     = [
+  "Cache/**",
+  "Code Cache/**",
+  "GPUCache/**",
+  "DawnGraphiteCache/**",
+  "DawnWebGPUCache/**",
+  "GrShaderCache/**",
+  "ShaderCache/**",
+]
+min_age     = "24h"
+name        = "Slack cache"
+description = "Images, files, and scripts Slack saved to load faster. Messages and settings aren't touched."
+
+# CachedData holds compiled code for each VS Code version (old versions'
+# copies are never used again), and CachedExtensionVSIXs holds downloaded
+# extension installers. User settings, backups, and workspace state are
+# left alone.
+[[rule]]
+id          = "app.vscode.cache"
+category    = "app-caches"
+level       = "simple"
+risk        = "low"
+needs_admin = false
+paths       = [
+  '%APPDATA%\Code',
+  '%APPDATA%\Code - Insiders',
+]
+include     = [
+  "Cache/**",
+  "Code Cache/**",
+  "GPUCache/**",
+  "DawnGraphiteCache/**",
+  "DawnWebGPUCache/**",
+  "CachedData/**",
+  "CachedExtensionVSIXs/**",
+]
+min_age     = "24h"
+name        = "Visual Studio Code cache"
+description = "Compiled code and downloaded extension installers VS Code keeps to start faster. Settings, extensions, and unsaved work aren't touched."

@@ -251,9 +251,11 @@ struct Finding {
 - Thumbnail cache
 - Windows Error Reporting files and crash dumps
 - Delivery Optimization cache
-- Shader caches (DirectX, NVIDIA, AMD)
-- App caches: Discord, Spotify, Teams, Slack, VS Code
-- Old log files
+- Shader caches (DirectX, NVIDIA, AMD, Intel), only files untouched for 30 days. Games rebuild them on the next launch (sometimes for minutes), and the driver caches can reach many gigabytes, so NVIDIA, AMD, and Intel are medium risk and "Select recommended" leaves them out.
+- App caches: Discord, Teams, Slack, VS Code. Spotify waits until its folders are checked on a real install: downloaded songs can share a folder with its cache.
+- Old log files in `%WINDIR%\Logs` (30 days untouched, medium risk, so they go to quarantine by default)
+
+The rules live in `rules/*.toml`; each one has a fixture test in `crates/oj-core/tests/fixtures.rs`.
 
 Items that need admin rights show a shield icon and go through the helper.
 

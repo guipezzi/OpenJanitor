@@ -366,8 +366,10 @@ fn build(report: &ScanReport, nodes: &mut Vec<Node>) -> Vec<NodeId> {
                 .strip_prefix(&finding.root)
                 .unwrap_or(&finding.path);
             let mut parts: Vec<_> = relative.iter().collect();
+            // A rule location that is itself a file has no relative parts.
             let file_name = parts
                 .pop()
+                .or_else(|| finding.path.file_name())
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| finding.path.to_string_lossy().into_owned());
 
@@ -447,7 +449,12 @@ mod tests {
             .enumerate()
             .map(|(index, &(rule_id, root, relative, size))| {
                 let rule = rules.iter().find(|r| r.rule_id == rule_id).unwrap();
-                let path = Path::new(root).join(relative);
+                // An empty relative path means the location is the file itself.
+                let path = if relative.is_empty() {
+                    PathBuf::from(root)
+                } else {
+                    Path::new(root).join(relative)
+                };
                 Finding {
                     id: index as u64 + 1,
                     rule_id: rule_id.into(),
@@ -654,6 +661,28 @@ mod tests {
         assert_eq!(
             names(categories[0].children.as_ref().unwrap()),
             ["Rule full"]
+        );
+    }
+
+    #[test]
+    fn a_location_that_is_a_file_shows_the_file_by_name() {
+        let results = ScanResults::new(report(
+            vec![rule("dumps", "crash-reports", Risk::Low, true)],
+            &[
+                ("dumps", r"C:\Windows\MEMORY.DMP", "", 500),
+                ("dumps", r"C:\Windows\Minidump", "mini.dmp", 5),
+            ],
+        ));
+        let rule = &results.categories()[0].children.clone().unwrap()[0];
+        let locations = all_children(&results, rule.id);
+        assert_eq!(
+            names(&locations),
+            [r"C:\Windows\MEMORY.DMP", r"C:\Windows\Minidump"]
+        );
+        let file = &all_children(&results, locations[0].id)[0];
+        assert_eq!(
+            (file.kind, file.name.as_str()),
+            (NodeKind::File, "MEMORY.DMP")
         );
     }
 

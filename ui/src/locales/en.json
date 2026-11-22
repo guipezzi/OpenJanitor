@@ -49,6 +49,7 @@
     "loading": "Loading…",
     "loadError": "Couldn't load these items: {{error}}",
     "alsoChecked": "Also checked, nothing to clean: {{rules}}",
+    "notChecked": "Couldn't fully check without administrator rights: {{rules}}. Checking with admin rights arrives in a later version.",
     "needsAdmin": "Needs administrator rights"
   },
   "details": {
@@ -62,6 +63,7 @@
     "location": "Location",
     "why": "Why it's here",
     "adminNote": "Cleaning this needs administrator rights. You'll be asked once per cleanup.",
+    "partlyRead": "Some of its folders can only be read with administrator rights, so there may be more to clean.",
     "openInExplorer": "Open in Explorer",
     "kind": {
       "category": "Category",
@@ -73,8 +75,12 @@
   },
   "categories": {
     "temporary-files": "Temporary files",
-    "crash-reports": "Crash reports",
-    "system-caches": "System caches"
+    "crash-reports": "Crash and error reports",
+    "system-caches": "System caches",
+    "logs": "Old log files",
+    "graphics-caches": "Graphics caches",
+    "browser-caches": "Browser caches",
+    "app-caches": "App caches"
   },
   "risk": {
     "low": "Low",

@@ -1,4 +1,4 @@
-import { ListChecks } from 'lucide-react'
+import { ListChecks, ShieldAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -6,7 +6,7 @@ import { DetailsPanel } from '@/components/details-panel'
 import { ResultsTree } from '@/components/results-tree'
 import { Button } from '@/components/ui/button'
 import { formatBytes } from '@/lib/format'
-import { revealInExplorer, type NodeView, type ScanOverview } from '@/lib/scan'
+import { couldNotRead, revealInExplorer, type NodeView, type ScanOverview } from '@/lib/scan'
 import { recommended, tallyAll, toggle } from '@/lib/selection'
 import { useResultsTree } from '@/lib/use-results-tree'
 
@@ -29,7 +29,12 @@ export function ResultsView({ overview }: { overview: ScanOverview }) {
     () => new Map(overview.rules.map((rule) => [rule.rule_id, rule])),
     [overview.rules],
   )
-  const nothingFound = overview.rules.filter((rule) => rule.findings === 0).map((rule) => rule.name)
+  // A rule that needs admin rights and couldn't read its folders found
+  // nothing because it couldn't look, not because there's nothing there.
+  const listFormat = new Intl.ListFormat(locale, { type: 'conjunction' })
+  const empty = overview.rules.filter((rule) => rule.findings === 0)
+  const notChecked = empty.filter(couldNotRead).map((rule) => rule.name)
+  const nothingFound = empty.filter((rule) => !couldNotRead(rule)).map((rule) => rule.name)
 
   return (
     <div className="flex flex-1 flex-col space-y-4">
@@ -65,11 +70,15 @@ export function ResultsView({ overview }: { overview: ScanOverview }) {
         />
       </div>
 
+      {notChecked.length > 0 && (
+        <p className="flex gap-2 text-sm text-amber-700 dark:text-amber-400">
+          <ShieldAlert className="mt-0.5 size-4 shrink-0" />
+          {t('results.notChecked', { rules: listFormat.format(notChecked) })}
+        </p>
+      )}
       {nothingFound.length > 0 && (
         <p className="text-sm text-muted-foreground">
-          {t('results.alsoChecked', {
-            rules: new Intl.ListFormat(locale, { type: 'conjunction' }).format(nothingFound),
-          })}
+          {t('results.alsoChecked', { rules: listFormat.format(nothingFound) })}
         </p>
       )}
 

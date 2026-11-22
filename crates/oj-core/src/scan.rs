@@ -341,8 +341,13 @@ fn make_finding(
 }
 
 /// `root\a\b.txt` → `"a/b.txt"`, for glob matching.
+/// When the rule's location is a single file (like `%WINDIR%\MEMORY.DMP`),
+/// it's the file's own name.
 fn relative_path(root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(root).ok()?;
+    if relative.as_os_str().is_empty() {
+        return path.file_name()?.to_str().map(str::to_owned);
+    }
     let parts = relative
         .components()
         .map(|c| c.as_os_str().to_str())

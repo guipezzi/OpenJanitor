@@ -14,7 +14,9 @@ import {
   type ScanOverview,
 } from './lib/scan'
 
-vi.mock('./lib/scan', () => ({
+vi.mock('./lib/scan', async (importOriginal) => ({
+  // Keep the plain helpers; replace the commands.
+  ...(await importOriginal<typeof import('./lib/scan')>()),
   canScan: vi.fn(() => true),
   scan: vi.fn(),
   cancelScan: vi.fn(() => Promise.resolve()),
@@ -96,6 +98,13 @@ const overview: ScanOverview = {
     }),
     rule({ rule_id: 'windows.crash-dumps.user', name: 'Crash dumps', category: 'crash-reports', risk: 'medium', findings: 10 }),
     rule({ rule_id: 'windows.thumbnail-cache', name: 'Thumbnail cache', status: 'no_locations' }),
+    rule({
+      rule_id: 'windows.crash-dumps.system',
+      name: 'System crash dumps',
+      category: 'crash-reports',
+      needs_admin: true,
+      walk: { ...rule({}).walk, unreadable: 2 },
+    }),
   ],
   categories: [
     node(1, 'category', 'temporary-files', 1147, 208_037_478, {
@@ -152,10 +161,13 @@ describe('App', () => {
     expect(scan).toHaveBeenCalledWith('simple', expect.any(Function))
     expect(screen.getByText('can be freed from 1,157 files')).toBeInTheDocument()
     expect(screen.getByText('Temporary files')).toBeInTheDocument()
-    expect(screen.getByText('Crash reports')).toBeInTheDocument()
+    expect(screen.getByText('Crash and error reports')).toBeInTheDocument()
     expect(screen.getByText('User temporary files')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Needs administrator rights' })).toBeInTheDocument()
     expect(screen.getByText('Also checked, nothing to clean: Thumbnail cache')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Couldn't fully check without administrator rights: System crash dumps\./),
+    ).toBeInTheDocument()
     expect(screen.getByText('Nothing selected')).toBeInTheDocument()
     for (const box of screen.getAllByRole('checkbox')) {
       expect(box).toHaveAttribute('aria-checked', 'false')
