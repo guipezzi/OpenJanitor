@@ -91,12 +91,21 @@ pub struct Rule {
     pub detect: Option<String>,
     #[serde(default)]
     pub builtin: Option<String>,
+    /// Whether "Select recommended" may pick this rule (D24). Only
+    /// low-risk rules are ever picked; this lets a low-risk rule opt out,
+    /// for example a big cache that just grows back.
+    #[serde(default = "yes")]
+    pub recommended: bool,
     pub name: String,
     pub description: String,
 }
 
 fn default_include() -> Vec<String> {
     vec!["**/*".to_string()]
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize)]

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { formatBytes, formatCount, formatDate } from '@/lib/format'
 import { useNodeLabel } from '@/lib/labels'
 import { couldNotRead, type NodeView, type RuleReport } from '@/lib/scan'
+import { isRecommended } from '@/lib/selection'
 import { cn } from '@/lib/utils'
 
 interface DetailsPanelProps {
@@ -111,6 +112,9 @@ export function DetailsPanel({ node, rule, onReveal, className }: DetailsPanelPr
       )}
       {node.kind === 'rule' && rule && couldNotRead(rule) && (
         <p className="text-sm text-muted-foreground">{t('details.partlyRead')}</p>
+      )}
+      {node.kind === 'rule' && node.risk === 'low' && !isRecommended(node) && (
+        <p className="text-sm text-muted-foreground">{t('details.notRecommended')}</p>
       )}
 
       {node.path && (

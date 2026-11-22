@@ -74,6 +74,9 @@ pub struct RuleReport {
     pub category: String,
     pub level: Level,
     pub risk: Risk,
+    /// Whether "Select recommended" may pick it (only if it's also low
+    /// risk).
+    pub recommended: bool,
     pub needs_admin: bool,
     pub status: RuleStatus,
     pub roots: Vec<PathBuf>,
@@ -190,6 +193,7 @@ impl Scanner<'_> {
             category: rule.category.clone(),
             level: rule.level,
             risk: rule.risk,
+            recommended: rule.recommended,
             needs_admin: rule.needs_admin,
             status: RuleStatus::Scanned,
             roots: Vec::new(),

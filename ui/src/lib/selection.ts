@@ -104,12 +104,17 @@ export function toggle(
   return next
 }
 
-/** "Select recommended": exactly the low-risk rules (decision D17). */
+/** Whether "Select recommended" picks this rule: low risk (D17) and not opted out (D24). */
+export function isRecommended(rule: NodeView): boolean {
+  return rule.risk === 'low' && rule.recommended !== false
+}
+
+/** "Select recommended": exactly the recommended rules. */
 export function recommended(categories: readonly NodeView[]): Map<number, boolean> {
   const choices = new Map<number, boolean>()
   for (const category of categories) {
     for (const rule of category.children ?? []) {
-      if (rule.risk === 'low') choices.set(rule.id, true)
+      if (isRecommended(rule)) choices.set(rule.id, true)
     }
   }
   return choices

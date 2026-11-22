@@ -142,6 +142,7 @@ fn junctions_are_never_deleted() {
         allocated: 0,
         links: 1,
         modified: metadata.modified().unwrap(),
+        file_id: oj_windows::disk_info(&link).unwrap().file_id,
     };
 
     let outcome = Executor::new(Mode::Live, &s.deny).delete_file(&snap);

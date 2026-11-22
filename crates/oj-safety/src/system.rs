@@ -26,8 +26,12 @@ pub struct SystemPaths {
     pub local_app_data: PathBuf,
     /// Desktop, Documents, Pictures, Music, Videos, and OneDrive roots.
     pub user_folders: Vec<PathBuf>,
-    /// OpenJanitor's own data folder.
+    /// OpenJanitor's own data folder, for this user
+    /// (`%LOCALAPPDATA%\OpenJanitor`).
     pub app_data: PathBuf,
+    /// OpenJanitor's machine-wide data folder, which only administrators
+    /// can change (`%PROGRAMDATA%\OpenJanitor`).
+    pub system_app_data: PathBuf,
 }
 
 /// A protected location couldn't be found. Without it the deny list would be
@@ -72,10 +76,12 @@ impl SystemPaths {
             program_files.push(x86);
         }
 
+        let program_data = get(KnownFolder::ProgramData, "ProgramData")?;
         Ok(Self {
             windows: get(KnownFolder::Windows, "Windows")?,
             program_files,
-            program_data: get(KnownFolder::ProgramData, "ProgramData")?,
+            system_app_data: program_data.join("OpenJanitor"),
+            program_data,
             users_root: user_profile
                 .parent()
                 .map(Path::to_path_buf)
@@ -100,6 +106,7 @@ impl SystemPaths {
             windows: root.join("Windows"),
             program_files: vec![root.join("Program Files"), root.join("Program Files (x86)")],
             program_data: root.join("ProgramData"),
+            system_app_data: root.join(r"ProgramData\OpenJanitor"),
             user_folders: [
                 "Desktop",
                 "Documents",
@@ -117,5 +124,18 @@ impl SystemPaths {
             local_app_data,
             user_profile,
         }
+    }
+
+    /// Where files from this user's own folders go into quarantine
+    /// (PLANNING.md §4.5).
+    pub fn personal_quarantine(&self) -> PathBuf {
+        self.app_data.join("Quarantine")
+    }
+
+    /// Where the elevated helper quarantines system files. It lives in the
+    /// machine-wide data folder so that a program running as the user
+    /// can't tamper with what the helper will later restore (D22).
+    pub fn system_quarantine(&self) -> PathBuf {
+        self.system_app_data.join("Quarantine")
     }
 }

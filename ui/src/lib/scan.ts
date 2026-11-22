@@ -24,6 +24,8 @@ export interface RuleReport {
   category: string
   level: Level
   risk: Risk
+  /** Whether "Select recommended" may pick it (only if it's also low risk). */
+  recommended: boolean
   needs_admin: boolean
   status: RuleStatus
   roots: string[]
@@ -56,6 +58,7 @@ export interface NodeView {
   name: string
   rule_id?: string
   risk?: Risk
+  recommended?: boolean
   needs_admin: boolean
   size_on_disk: number
   file_count: number

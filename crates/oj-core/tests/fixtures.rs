@@ -292,12 +292,14 @@ fn shader_caches_skip_files_used_in_the_last_30_days() {
 }
 
 #[test]
-fn driver_shader_caches_are_not_recommended() {
+fn driver_shader_caches_are_low_risk_but_not_recommended() {
     for compiled in bundled().iter() {
-        let id = compiled.rule.id.as_str();
-        if id.starts_with("gpu.") {
-            assert_eq!(compiled.rule.risk, oj_core::Risk::Medium, "{id}");
+        let rule = &compiled.rule;
+        let is_driver_cache = rule.id.starts_with("gpu.");
+        if is_driver_cache {
+            assert_eq!(rule.risk, oj_core::Risk::Low, "{}", rule.id);
         }
+        assert_eq!(rule.recommended, !is_driver_cache, "{}", rule.id);
     }
 }
 

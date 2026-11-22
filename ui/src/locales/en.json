@@ -33,7 +33,7 @@
   "results": {
     "label": "Scan results",
     "selectRecommended": "Select recommended",
-    "recommendedHint": "Recommended means low-risk items only. Nothing is selected until you choose.",
+    "recommendedHint": "Recommended means low-risk items, minus big caches that just grow back. Nothing is selected until you choose.",
     "clearSelection": "Clear selection",
     "selected_one": "{{count, number}} file selected · {{size}}",
     "selected_other": "{{count, number}} files selected · {{size}}",
@@ -64,6 +64,7 @@
     "why": "Why it's here",
     "adminNote": "Cleaning this needs administrator rights. You'll be asked once per cleanup.",
     "partlyRead": "Some of its folders can only be read with administrator rights, so there may be more to clean.",
+    "notRecommended": "\"Select recommended\" leaves this out. Select it yourself if you want to clean it.",
     "openInExplorer": "Open in Explorer",
     "kind": {
       "category": "Category",

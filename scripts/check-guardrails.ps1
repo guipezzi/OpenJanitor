@@ -11,6 +11,11 @@
     shell plugins are banned, and the window's capabilities
     (src-tauri/capabilities) can't grant fs or shell permissions. The UI can
     only call the Rust commands in src-tauri.
+
+    One file outside oj-safety may hold a move call:
+    crates/oj-windows/src/file_move.rs, the raw Win32 move behind quarantine
+    (unsafe code must live in oj-windows). It's skipped here, and calling its
+    function (move_no_replace) anywhere outside oj-safety fails the check.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -27,6 +32,7 @@ $patterns = @(
     '\bIFileOperation\b'
     '\bFileDispositionInfo(Ex)?\b'
     '\bfs\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|rename|renameSync)\b'
+    '\bmove_no_replace\b'
     'tauri-plugin-fs'
     '@tauri-apps/plugin-fs'
     'tauri-plugin-shell'
@@ -42,6 +48,7 @@ $excluded = @(
     (Join-Path $root 'ui\dist')
     (Join-Path $root 'src-tauri\gen')
 )
+$allowedFile = Join-Path $root 'crates\oj-windows\src\file_move.rs'
 
 $files = @(
     Get-ChildItem -Path $root -Recurse -File -Include *.rs, *.ts, *.tsx, *.js, *.jsx, *.mjs, Cargo.toml, package.json
@@ -50,6 +57,7 @@ $files = @(
     Where-Object {
         $path = $_.FullName
         -not ($excluded | Where-Object { $path.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) }) -and
+        -not $path.Equals($allowedFile, [StringComparison]::OrdinalIgnoreCase) -and
         $path -notmatch '\\node_modules\\'
     }
 
