@@ -64,6 +64,8 @@ Commercial cleaners usually lock their most useful features behind a paywall. Op
 | D26 | Cleanup plan     | The confirmation shows a fixed plan, built in Rust from the selection. Confirming runs exactly that plan: it can lose files that changed (revalidation) but never gains any. Results older than an hour come with a "Scan again" suggestion ([§7.1](#71-main-screen)) |
 | D27 | Confirming deletion | When a plan deletes files for good, an "I understand that N files will be permanently deleted" checkbox must be ticked before the button works ([§7.1](#71-main-screen)) |
 | D28 | Open apps        | While a browser or app runs, its cache is left out of the plan; the confirmation names it and offers "Check again". OpenJanitor never closes apps itself ([§6.1](#61-simple-clean-phase-1)) |
+| D29 | Quarantine actions | Restore conflicts are asked about once per restore (Replace, Keep both, or Skip, for all of them). Expired files are deleted at startup without asking, and the screen says so. "Delete now" and "Empty quarantine now" need the same tick as D27 ([§7.3](#73-quarantine-screen)) |
+| D30 | History retention | Per-file lines are kept for 90 days; after that, each cleanup keeps only its totals line, forever ([§4.8](#48-audit-log)) |
 
 ## 4. Safety model
 
@@ -143,8 +145,8 @@ A setting, "Always quarantine everything", exists for cautious users.
 - **Crash-safe:** each step is written to the manifest before it happens ("moving in", "restoring"), and the manifest itself is replaced atomically. At startup, recovery checks every unfinished step and finds the file at its original path or in the batch. A file is never in neither place.
 - **Nothing in a manifest is trusted:** stored names must be exactly `items/` plus the item's number, restore destinations go through the deny list, and a stored file must still be the same file before it's restored or deleted.
 - **In practice, most simple-clean items skip quarantine:** they're low risk, so the default policy deletes them directly. Quarantine is used for medium and review items, and for everything when "Always quarantine everything" is on.
-- **Restore conflicts:** if something exists at the original path again, the user picks Replace, Keep both ("name (restored).ext"), or Skip. Replace moves the current file into quarantine first, so nothing is lost (D23). Missing parent folders are recreated.
-- Expired items are purged when the app starts (and by scheduled cleaning, phase 4). Expired items in the system quarantine need admin rights, so they wait for the next cleanup that already uses the helper, or for an "Empty (needs admin)" button; the app never shows a UAC prompt just for starting (D25).
+- **Restore conflicts:** if something exists at the original path again, the user picks Replace, Keep both ("name (restored).ext"), or Skip. Replace moves the current file into quarantine first (for 30 days), so nothing is lost (D23). Missing parent folders are recreated. The choice is asked once per restore and applies to every conflict in it (D29).
+- Expired items are purged when the app starts (and by scheduled cleaning, phase 4), after recovery and before the window can ask for anything. There's no prompt (D29): the dates were shown when the files went in, and the Quarantine screen says what was deleted. If the history file can't be opened, nothing is purged, so every deletion is on record. Unreadable batches are never touched. Expired items in the system quarantine need admin rights, so they wait for the next cleanup that already uses the helper, or for an "Empty (needs admin)" button; the app never shows a UAC prompt just for starting (D25).
 - The Quarantine screen reuses the results tree component, with Restore and Delete now actions.
 
 ### 4.6 Privilege model
@@ -175,9 +177,10 @@ Every action is appended to a local log with timestamp, path, size, rule id, and
 
 - **File:** `%LOCALAPPDATA%\OpenJanitor\history.jsonl`, JSON Lines (D16). Each line has a `type` and a format version `v`.
 - **A cleanup writes** one `file` line per file it acted on or skipped (with the reason), one `folder` line per folder it removed, and a final `cleanup` line with the totals. Its lines share a `cleanup` number.
+- **The quarantine writes** a `quarantine` line per file, with its `action`: `restore`, `replace` (a file a restore moved aside), `delete` (on request), or `expired`.
 - **Dry runs are logged too,** marked `"mode": "dry_run"`, so the History screen can tell them apart.
 - If the log can't be opened, the cleanup doesn't start. If a write fails partway, the cleanup goes on (the quarantine manifests still record every move) and the summary says the history is incomplete.
-- **Size:** about 300 bytes per file, so a 20,000-file cleanup adds about 6 MB. How long to keep it, and whether to trim old cleanups down to their totals, is decided with the History screen (PR 7).
+- **Size and retention (D30):** about 300 bytes per file, so a 20,000-file cleanup adds about 6 MB. Per-file lines are kept for 90 days; after that, a cleanup keeps only its `cleanup` totals line, which stays forever (the "total space freed" figure needs it). Trimming arrives with the History screen (PR 7b).
 
 ## 5. Architecture
 
@@ -350,6 +353,14 @@ Items the user marks as false positives. Granularity: a file, a folder (recursiv
 
 Uses the same tree component, with **Restore** and **Delete now** actions. It shows each item's expiry date, the total size held, and "Empty quarantine now".
 
+- **Tree:** cleanup (named by its date, newest first) → the folder the files came from → file, with tri-state checkboxes and an "until <date>" column. Node ids come from a view of the manifests; actions quote the view's id, so a stale view can't act.
+- **Top:** space held and file count, and the next files to go ("3 files (24 KB) will be deleted for good on Dec 1").
+- **Restore** checks for conflicts first. If there are any, one dialog lists them and offers Replace, Keep both, or Skip for all of them (D29). Otherwise files go back right away.
+- **Delete now** and **Empty quarantine now** confirm with the D27 tick.
+- **Notes:** expired files deleted at startup, and batches that couldn't be read (left alone, with their folder).
+- **One action at a time:** a restore or delete takes the same slot as a scan or a cleanup, so a cleanup can't write a manifest while a restore reads it.
+- Dev builds show "Test mode" and only report what would happen.
+
 ### 7.4 Other screens
 
 - **History:** the audit log and the total space freed
@@ -489,7 +500,9 @@ Small PRs in four blocks. Each one leaves the app working. The Clean button only
 
 6. **Clean button.** A confirmation that shows what will be deleted and what will be quarantined, the per-risk policy, the audit log, and a results screen. The UI sends finding ids from the last scan, never paths. Dev builds stay in dry-run and say so on screen. Admin-only items are left out (and counted) until PR 11. Quarantine recovery runs at startup.
    - **6b. Running apps.** Before cleaning a browser or app cache, ask the user to close the app if it's running ([§6.1](#61-simple-clean-phase-1)), instead of skipping its open files. Rules name their apps' program files (`app`), and the plan leaves open apps out (D28).
-7. **Quarantine and History screens**, and purging expired items at startup.
+7. **Quarantine and History screens**, and purging expired items at startup. Split in two:
+   - **7a. Quarantine screen** ([§7.3](#73-quarantine-screen)): restore with conflict choices, delete now, empty, and deleting expired files at startup, all written to the history.
+   - **7b. History screen** ([§7.4](#74-other-screens)): cleanups with their totals and files, the total space freed, and trimming old per-file lines (D30).
 8. **Settings.** Minimum age, quarantine policy and retention, "Always quarantine everything", and theme (system, light, dark).
 9. **Recycle Bin** through the shell API.
 

@@ -29,6 +29,8 @@ pub enum NodeKind {
     Location,
     Folder,
     File,
+    /// One cleanup's files in quarantine (only in the quarantine tree).
+    Batch,
 }
 
 /// A node as the UI sees it.
@@ -60,6 +62,14 @@ pub struct NodeView {
     /// Why a file was flagged, for the details panel.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<String>,
+    /// Quarantine tree only: when the files went into quarantine, in
+    /// seconds since the Unix epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarantined_at: Option<u64>,
+    /// Quarantine tree only: when the first of the files may be deleted for
+    /// good, in seconds since the Unix epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
     pub has_children: bool,
     /// Children sent ahead of time (the rules inside each category). Other
     /// children are fetched with [`ScanResults::children`].
@@ -343,6 +353,8 @@ impl ScanResults {
                 .finding
                 .map(|index| self.report.findings[index].evidence.clone())
                 .unwrap_or_default(),
+            quarantined_at: None,
+            expires_at: None,
             has_children: !node.children.is_empty(),
             children: None,
         }

@@ -7,6 +7,10 @@
 //! - `file`: one file a cleanup acted on, or tried to, with the result.
 //! - `folder`: a folder removed because the cleanup left it empty.
 //! - `cleanup`: the totals, written last.
+//! - `quarantine`: a quarantined file restored (`restore`), deleted for
+//!   good on request (`delete`) or because its time was up (`expired`), or
+//!   a file moved into quarantine because a restore replaced it
+//!   (`replace`).
 //!
 //! Lines of one cleanup share its `cleanup` number (when it started, in
 //! milliseconds since the Unix epoch), and `mode` says whether it was a
@@ -63,6 +67,41 @@ enum Line<'a> {
         #[serde(flatten)]
         report: &'a CleanReport,
     },
+    Quarantine {
+        v: u32,
+        at: u64,
+        mode: Mode,
+        action: QuarantineAction,
+        quarantine_batch: &'a str,
+        quarantine_item: u32,
+        /// Where the file came from.
+        path: &'a Path,
+        size: u64,
+        #[serde(flatten)]
+        outcome: &'a Outcome,
+    },
+}
+
+/// What happened to a quarantined file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuarantineAction {
+    /// Moved back where it came from.
+    Restore,
+    /// The file at a restore destination, moved into quarantine (D23).
+    Replace,
+    /// Deleted for good because the user asked.
+    Delete,
+    /// Deleted for good because its time in quarantine was up.
+    Expired,
+}
+
+/// One quarantined file, for a history line.
+pub(crate) struct HeldFile<'a> {
+    pub batch: &'a str,
+    pub item: u32,
+    pub path: &'a Path,
+    pub size: u64,
 }
 
 impl History {
@@ -125,6 +164,26 @@ impl History {
             started_at,
             finished_at,
             report,
+        });
+    }
+
+    pub(crate) fn quarantine(
+        &mut self,
+        mode: Mode,
+        action: QuarantineAction,
+        file: &HeldFile,
+        outcome: &Outcome,
+    ) {
+        self.write(&Line::Quarantine {
+            v: FORMAT_VERSION,
+            at: now(),
+            mode,
+            action,
+            quarantine_batch: file.batch,
+            quarantine_item: file.item,
+            path: file.path,
+            size: file.size,
+            outcome,
         });
     }
 

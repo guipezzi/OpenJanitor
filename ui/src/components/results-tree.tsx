@@ -1,4 +1,5 @@
 import {
+  Archive,
   ChevronRight,
   File,
   Folder,
@@ -15,7 +16,7 @@ import { useTranslation } from 'react-i18next'
 import { RiskBadge } from '@/components/risk-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { formatBytes } from '@/lib/format'
+import { formatBytes, formatDay } from '@/lib/format'
 import { useNodeLabel } from '@/lib/labels'
 import type { NodeKind, NodeView } from '@/lib/scan'
 import { checkState, type CheckState, type Tally } from '@/lib/selection'
@@ -25,6 +26,10 @@ import { cn } from '@/lib/utils'
 const INDENT = 20
 
 interface ResultsTreeProps {
+  /** The tree's accessible name; the scan results by default. */
+  label?: string
+  /** Adds a column with the date files may be deleted (the quarantine tree). */
+  showExpiry?: boolean
   rows: Row[]
   expanded: ReadonlySet<number>
   tallies: ReadonlyMap<number, Tally>
@@ -48,10 +53,31 @@ function KindIcon({ kind, open }: { kind: NodeKind; open: boolean }) {
       return open ? <FolderOpen className={className} /> : <Folder className={className} />
     case 'file':
       return <File className={className} />
+    case 'batch':
+      return <Archive className={className} />
   }
 }
 
+/**
+ * A node's name. Folder and location names can be long paths that differ
+ * only at the end, so the last part always shows and the rest is trimmed.
+ */
+function NodeName({ kind, name }: { kind: NodeKind; name: string }) {
+  const cut = name.lastIndexOf('\\')
+  if ((kind !== 'folder' && kind !== 'location') || cut <= 0 || cut === name.length - 1) {
+    return <span className="truncate">{name}</span>
+  }
+  return (
+    <span className="flex min-w-0" title={name}>
+      <span className="truncate">{name.slice(0, cut + 1)}</span>
+      <span className="shrink-0">{name.slice(cut + 1)}</span>
+    </span>
+  )
+}
+
 export function ResultsTree({
+  label: treeLabel,
+  showExpiry = false,
   rows,
   expanded,
   tallies,
@@ -66,7 +92,7 @@ export function ResultsTree({
   const locale = i18n.language
 
   return (
-    <div className="rounded-xl border bg-card p-1.5" aria-label={t('results.label')} role="group">
+    <div className="rounded-xl border bg-card p-1.5" aria-label={treeLabel ?? t('results.label')} role="group">
       {rows.map((row) => {
         const indent = { paddingLeft: row.depth * INDENT + 8 }
         if (row.type !== 'node') {
@@ -133,7 +159,7 @@ export function ResultsTree({
               onClick={() => onFocus(node)}
             >
               <KindIcon kind={node.kind} open={isOpen} />
-              <span className="truncate">{name}</span>
+              <NodeName kind={node.kind} name={name} />
               {node.kind === 'rule' && node.risk && <RiskBadge risk={node.risk} />}
               {node.kind === 'rule' && node.needs_admin && (
                 <ShieldAlert
@@ -148,6 +174,12 @@ export function ResultsTree({
             <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
               {node.kind !== 'file' && t('results.files', { count: node.file_count })}
             </span>
+            {showExpiry && (
+              <span className="hidden w-32 shrink-0 text-right text-xs text-muted-foreground tabular-nums md:block">
+                {node.expires_at !== undefined &&
+                  t('quarantine.until', { date: formatDay(node.expires_at, locale) })}
+              </span>
+            )}
             <span className="w-20 shrink-0 text-right text-sm tabular-nums">
               {formatBytes(node.size_on_disk, locale)}
             </span>

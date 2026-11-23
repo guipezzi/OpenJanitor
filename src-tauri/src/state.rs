@@ -1,6 +1,6 @@
 //! What the app remembers between commands: the results of the last scan,
-//! the cleanup plan made from them, and the operation that's running, if
-//! any.
+//! the cleanup plan made from them, the quarantine as last shown, and the
+//! operation that's running, if any.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -9,8 +9,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_core::{
-    CancelToken, ChildPage, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy,
-    RuleReport, RunningPrograms, ScanReport, ScanResults,
+    CancelToken, ChildPage, ItemRef, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy,
+    QuarantineReport, QuarantineSummary, QuarantineView, RuleReport, RunningPrograms, ScanReport,
+    ScanResults,
 };
 use oj_safety::{Entry, EntryKind, Mode, ProtectedList};
 use serde::Serialize;
@@ -56,10 +57,36 @@ pub struct PlanView {
     pub stale: bool,
 }
 
+/// What the Quarantine screen gets.
+#[derive(Debug, Serialize)]
+pub struct QuarantineOverview {
+    /// Identifies this view; actions quote it, so they can't mix up node
+    /// ids from an older one.
+    pub view_id: u64,
+    pub mode: Mode,
+    #[serde(flatten)]
+    pub summary: QuarantineSummary,
+    /// Batches, newest first, each with its folders.
+    pub batches: Vec<NodeView>,
+    /// Expired files deleted when the app started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expired: Option<ExpiredNote>,
+}
+
+/// What deleting expired files at startup did.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExpiredNote {
+    /// Seconds since the Unix epoch.
+    pub at: u64,
+    #[serde(flatten)]
+    pub report: QuarantineReport,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Operation {
     Scan,
     Clean,
+    Quarantine,
 }
 
 #[derive(Debug)]
@@ -81,9 +108,12 @@ struct Session {
 pub struct AppState {
     last_scan_id: AtomicU64,
     last_plan_id: AtomicU64,
-    /// One scan or cleanup at a time.
+    /// One scan, cleanup, or quarantine action at a time.
     running: Mutex<Option<Running>>,
     session: Mutex<Option<Session>>,
+    /// The quarantine as the Quarantine screen last loaded it.
+    quarantine: Mutex<Option<QuarantineView>>,
+    expired: Mutex<Option<ExpiredNote>>,
     /// Held while reading, changing, and saving the Protected list, so two
     /// changes can't overwrite each other.
     protected_file: Mutex<()>,
@@ -221,6 +251,81 @@ impl AppState {
         self.finish(Operation::Clean);
     }
 
+    /// Keeps a freshly loaded quarantine view, replacing the last one, and
+    /// returns what the Quarantine screen shows.
+    pub fn show_quarantine(&self, view: QuarantineView, mode: Mode) -> QuarantineOverview {
+        let overview = QuarantineOverview {
+            view_id: view.id(),
+            mode,
+            summary: view.summary().clone(),
+            batches: view.batches(),
+            expired: lock(&self.expired).clone(),
+        };
+        *lock(&self.quarantine) = Some(view);
+        overview
+    }
+
+    /// One page of a node's children from quarantine view `view_id`.
+    pub fn quarantine_children(
+        &self,
+        view_id: u64,
+        node: NodeId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<ChildPage, String> {
+        self.with_quarantine(view_id, |view| {
+            view.children(node, offset, limit.min(MAX_PAGE))
+                .ok_or_else(|| no_item(node))
+        })
+    }
+
+    /// The quarantined files a selection in view `view_id` covers.
+    pub fn quarantine_items(
+        &self,
+        view_id: u64,
+        choices: &HashMap<NodeId, bool>,
+    ) -> Result<Vec<ItemRef>, String> {
+        self.with_quarantine(view_id, |view| Ok(view.selected(choices)))
+    }
+
+    /// Starts a restore or a delete: the view it came from is out of date
+    /// afterwards. Fails if anything else is running.
+    pub fn begin_quarantine(&self) -> Result<(), String> {
+        let mut running = lock(&self.running);
+        if let Some(busy) = running.as_ref() {
+            return Err(busy_message(busy.operation));
+        }
+        *lock(&self.quarantine) = None;
+        *running = Some(Running {
+            operation: Operation::Quarantine,
+            cancel: CancelToken::new(),
+        });
+        Ok(())
+    }
+
+    /// Records that the restore or delete ended.
+    pub fn finish_quarantine(&self) {
+        self.finish(Operation::Quarantine);
+    }
+
+    /// Remembers what deleting expired files at startup did.
+    pub fn set_expired(&self, note: ExpiredNote) {
+        *lock(&self.expired) = Some(note);
+    }
+
+    fn with_quarantine<T>(
+        &self,
+        view_id: u64,
+        f: impl FnOnce(&QuarantineView) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let view = lock(&self.quarantine);
+        let view = view
+            .as_ref()
+            .filter(|view| view.id() == view_id)
+            .ok_or("The quarantine changed. Open it again.")?;
+        f(view)
+    }
+
     fn cancel(&self, operation: Operation) {
         if let Some(running) = lock(&self.running)
             .as_ref()
@@ -287,6 +392,7 @@ impl AppState {
                 ),
                 NodeKind::Location | NodeKind::Folder => (EntryKind::Folder, path()?, None),
                 NodeKind::File => (EntryKind::File, path()?, None),
+                NodeKind::Batch => return Err(no_item(node)),
             };
             Ok(Entry {
                 kind,
@@ -331,6 +437,7 @@ fn busy_message(operation: Operation) -> String {
     match operation {
         Operation::Scan => "A scan is already running.",
         Operation::Clean => "A cleanup is running. Wait for it to finish.",
+        Operation::Quarantine => "The quarantine is busy. Wait a moment and try again.",
     }
     .into()
 }
@@ -526,6 +633,90 @@ mod tests {
         );
         state.finish_clean();
         assert!(state.begin_scan().is_err(), "the scan still holds the slot");
+    }
+
+    /// A view of a quarantine folder that doesn't exist: empty.
+    fn empty_quarantine() -> QuarantineView {
+        let nowhere = std::env::temp_dir().join("openjanitor-tests-no-such-quarantine");
+        QuarantineView::load(&oj_safety::Store::new(nowhere)).unwrap()
+    }
+
+    #[test]
+    fn quarantine_actions_need_the_current_view() {
+        let state = AppState::default();
+        assert!(
+            state
+                .quarantine_items(1, &HashMap::new())
+                .unwrap_err()
+                .contains("Open it again")
+        );
+        let first = state.show_quarantine(empty_quarantine(), Mode::DryRun);
+        assert!(first.batches.is_empty());
+        assert_eq!(first.summary.held.files, 0);
+        let second = state.show_quarantine(empty_quarantine(), Mode::DryRun);
+        assert_ne!(first.view_id, second.view_id);
+
+        assert!(
+            state
+                .quarantine_items(first.view_id, &HashMap::new())
+                .is_err()
+        );
+        assert!(
+            state
+                .quarantine_items(second.view_id, &HashMap::new())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(state.quarantine_children(second.view_id, 0, 0, 10).is_err());
+    }
+
+    #[test]
+    fn a_quarantine_action_holds_the_slot_and_ends_the_view() {
+        let state = AppState::default();
+        let view = state.show_quarantine(empty_quarantine(), Mode::DryRun);
+
+        state.begin_quarantine().unwrap();
+        assert!(
+            state
+                .begin_scan()
+                .unwrap_err()
+                .contains("quarantine is busy")
+        );
+        assert!(state.begin_quarantine().is_err());
+        assert!(
+            state
+                .quarantine_items(view.view_id, &HashMap::new())
+                .is_err()
+        );
+        state.finish_clean();
+        assert!(state.begin_scan().is_err(), "only its own finish frees it");
+        state.finish_quarantine();
+        assert!(state.begin_scan().is_ok());
+        assert!(
+            state
+                .begin_quarantine()
+                .unwrap_err()
+                .contains("scan is already running")
+        );
+    }
+
+    #[test]
+    fn the_startup_note_shows_up_with_the_quarantine() {
+        let state = AppState::default();
+        state.set_expired(ExpiredNote {
+            at: 42,
+            report: QuarantineReport {
+                mode: Mode::Live,
+                done: oj_core::Tally {
+                    files: 3,
+                    size: 300,
+                },
+                skipped: Vec::new(),
+                history_error: None,
+            },
+        });
+        let overview = state.show_quarantine(empty_quarantine(), Mode::Live);
+        assert_eq!(overview.expired.unwrap().report.done.files, 3);
     }
 
     #[test]

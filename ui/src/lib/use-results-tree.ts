@@ -1,7 +1,8 @@
-// Loading the results tree one level and one page at a time.
+// Loading a tree (scan results, or the quarantine) one level and one page
+// at a time.
 import { useCallback, useMemo, useState } from 'react'
 
-import { scanChildren, type NodeView, type ScanOverview } from './scan'
+import { scanChildren, type ChildPage, type NodeView, type ScanOverview } from './scan'
 import type { LoadedChildren } from './selection'
 
 /** How many children to fetch per request. */
@@ -22,35 +23,51 @@ export type Row =
   | { type: 'loading'; parent: NodeView; depth: number }
   | { type: 'error'; parent: NodeView; depth: number; error: string }
 
+/** Fetches one page of a node's children. */
+export type LoadChildren = (nodeId: number, offset: number, limit: number) => Promise<ChildPage>
+
 const EMPTY: Page = { items: [], total: 0, loading: false, error: null }
 
-function initialPages(overview: ScanOverview): Map<number, Page> {
+function initialPages(roots: readonly NodeView[]): Map<number, Page> {
   return new Map(
-    overview.categories.map((category) => {
-      const rules = category.children ?? []
-      return [category.id, { ...EMPTY, items: rules, total: rules.length }]
+    roots.map((root) => {
+      const children = root.children ?? []
+      return [root.id, { ...EMPTY, items: children, total: children.length }]
     }),
   )
 }
 
 /**
- * Tree state for one scan. Mount it with `key={overview.scan_id}` so a new
- * scan starts fresh. Categories start expanded, showing their rules.
+ * Tree state for one scan's results. Mount it with
+ * `key={overview.scan_id}` so a new scan starts fresh. Categories start
+ * expanded, showing their rules.
  */
 export function useResultsTree(overview: ScanOverview) {
-  const [pages, setPages] = useState(() => initialPages(overview))
-  const [expanded, setExpanded] = useState(
-    () => new Set(overview.categories.map((category) => category.id)),
+  const scanId = overview.scan_id
+  const loadChildren: LoadChildren = useCallback(
+    (nodeId, offset, limit) => scanChildren(scanId, nodeId, offset, limit),
+    [scanId],
   )
+  return useTree(overview.categories, loadChildren)
+}
 
-  // A new overview for the same scan (after protecting something): node ids
-  // are the same, but totals and children changed, so start over from the
-  // categories. The caller keeps its selection.
-  const [source, setSource] = useState(overview)
-  if (source !== overview) {
-    setSource(overview)
-    setPages(initialPages(overview))
-    setExpanded(new Set(overview.categories.map((category) => category.id)))
+/**
+ * Tree state for any tree whose top level arrives with its first children
+ * (`roots[i].children`); deeper levels come from `loadChildren`. The roots
+ * start expanded.
+ */
+export function useTree(roots: readonly NodeView[], loadChildren: LoadChildren) {
+  const [pages, setPages] = useState(() => initialPages(roots))
+  const [expanded, setExpanded] = useState(() => new Set(roots.map((root) => root.id)))
+
+  // New roots for the same tree (after protecting something): node ids are
+  // the same, but totals and children changed, so start over from the top.
+  // The caller keeps its selection.
+  const [source, setSource] = useState(roots)
+  if (source !== roots) {
+    setSource(roots)
+    setPages(initialPages(roots))
+    setExpanded(new Set(roots.map((root) => root.id)))
   }
 
   const load = useCallback(
@@ -59,7 +76,7 @@ export function useResultsTree(overview: ScanOverview) {
         setPages((previous) => new Map(previous).set(id, change(previous.get(id) ?? EMPTY)))
       update((page) => ({ ...page, loading: true, error: null }))
       try {
-        const result = await scanChildren(overview.scan_id, id, offset, PAGE_SIZE)
+        const result = await loadChildren(id, offset, PAGE_SIZE)
         update((page) => ({
           items: [...page.items, ...result.items],
           total: result.total,
@@ -70,7 +87,7 @@ export function useResultsTree(overview: ScanOverview) {
         update((page) => ({ ...page, loading: false, error: String(cause) }))
       }
     },
-    [overview.scan_id],
+    [loadChildren],
   )
 
   const toggleExpanded = (node: NodeView) => {
@@ -118,9 +135,9 @@ export function useResultsTree(overview: ScanOverview) {
         }
       }
     }
-    walk(overview.categories, 0)
+    walk(roots, 0)
     return out
-  }, [overview.categories, pages, expanded])
+  }, [roots, pages, expanded])
 
   return { rows, loaded, expanded, toggleExpanded, loadMore }
 }
