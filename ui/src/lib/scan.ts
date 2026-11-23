@@ -60,7 +60,8 @@ export interface ScanProgress {
   size_on_disk: number
 }
 
-export type NodeKind = 'category' | 'rule' | 'location' | 'folder' | 'file'
+/** `batch` is one cleanup's files in quarantine (the quarantine tree only). */
+export type NodeKind = 'category' | 'rule' | 'location' | 'folder' | 'file' | 'batch'
 
 /** One item of the results tree (oj_core::NodeView). */
 export interface NodeView {
@@ -78,6 +79,10 @@ export interface NodeView {
   /** For display only: commands take node ids, never paths. */
   path?: string
   evidence?: string[]
+  /** Quarantine tree only: when the files went in (seconds since the Unix epoch). */
+  quarantined_at?: number
+  /** Quarantine tree only: when the first of the files may be deleted for good. */
+  expires_at?: number
   has_children: boolean
   /** Children sent ahead of time; otherwise use scanChildren. */
   children?: NodeView[]

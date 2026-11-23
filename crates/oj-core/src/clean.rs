@@ -70,7 +70,7 @@ pub struct Tally {
 }
 
 impl Tally {
-    fn add(&mut self, size: u64) {
+    pub(crate) fn add(&mut self, size: u64) {
         self.files += 1;
         self.size += size;
     }
