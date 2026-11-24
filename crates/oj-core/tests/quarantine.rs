@@ -331,6 +331,53 @@ fn a_dry_run_moves_and_deletes_nothing() {
 }
 
 #[test]
+fn the_history_reads_back_each_action_as_one_entry() {
+    use oj_core::{EntryKind, HistoryView};
+
+    let s = setup();
+    let a = s.item(&s.logs.join(r"app\a.log"));
+    let b = s.item(&s.logs.join(r"app\b.log"));
+    write_file(&s.logs.join(r"app\a.log"), 10);
+    s.keep(Mode::Live, |k| {
+        k.restore(&[a], IfExists::Replace, SystemTime::now())
+    });
+    s.keep(Mode::Live, |k| k.delete(&[b]));
+    s.keep(Mode::Live, |k| k.delete_expired(s.then + DAY * 8).unwrap());
+
+    let view = HistoryView::load(&s.m.system.history_path()).unwrap();
+    let mut kinds: Vec<(EntryKind, u64, bool)> = view
+        .entries()
+        .iter()
+        .map(|e| (e.kind, e.files, e.freed > 0))
+        .collect();
+    kinds.sort_by_key(|(kind, ..)| format!("{kind:?}"));
+    assert_eq!(
+        kinds,
+        [
+            (EntryKind::Delete, 1, true),
+            (EntryKind::Expired, 1, true),
+            (EntryKind::Restore, 1, false),
+        ],
+        "c.log expired; the replaced a.log stays in quarantine for 30 days"
+    );
+    let restore = view
+        .entries()
+        .iter()
+        .find(|e| e.kind == EntryKind::Restore)
+        .unwrap();
+    let results: Vec<String> = view
+        .files(restore.id, 0, 10)
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|f| f.result)
+        .collect();
+    assert_eq!(results, ["restored", "replaced"]);
+    assert!(view.entries().iter().all(|e| !e.interrupted));
+    assert_eq!(view.unreadable_lines(), 0);
+}
+
+#[test]
 fn unreadable_batches_are_listed_and_left_alone() {
     let s = setup();
     let broken = s.m.system.personal_quarantine().join("20200101-000000");

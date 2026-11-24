@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_safety::{CancelToken, Executor, Mode, Outcome, SkipReason, Store};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::history::History;
 use crate::results::{NodeId, ScanResults};
@@ -63,7 +63,7 @@ impl Policy {
 }
 
 /// A number of files and the space they take on disk.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tally {
     pub files: u64,
     pub size: u64,

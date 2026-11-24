@@ -10,6 +10,7 @@
 
 mod clean;
 mod commands;
+mod history;
 mod protected;
 mod quarantine;
 mod state;
@@ -18,10 +19,12 @@ fn main() {
     tauri::Builder::default()
         .manage(state::AppState::default())
         .setup(|app| {
-            // Before the window can ask for anything: first put the
-            // quarantine back in order, then delete what has expired.
+            // Before the window can ask for anything: put the quarantine
+            // back in order, delete what has expired, then trim old
+            // per-file history lines.
             clean::recover_quarantine();
             quarantine::delete_expired_at_startup(app.handle());
+            history::trim_at_startup();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -43,6 +46,8 @@ fn main() {
             quarantine::quarantine_conflicts,
             quarantine::restore_quarantined,
             quarantine::delete_quarantined,
+            history::history_overview,
+            history::history_files,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenJanitor");

@@ -364,6 +364,19 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
     let totals = history.last().unwrap();
     assert_eq!(totals["deleted"]["files"], 4);
     assert_eq!(totals["folders_removed"], 3);
+
+    // The History screen reads it back as one entry.
+    let view = oj_core::HistoryView::load(&machine.m.system.history_path()).unwrap();
+    let [entry] = view.entries() else {
+        panic!("one entry expected, got {:?}", view.entries());
+    };
+    assert_eq!(entry.kind, oj_core::EntryKind::Cleanup);
+    assert_eq!(entry.files, 6);
+    assert_eq!(entry.freed, report.deleted.size);
+    assert_eq!(entry.quarantined.files, 2);
+    assert_eq!(entry.details, 9, "6 files and 3 folders");
+    assert_eq!(view.totals().freed, report.deleted.size);
+    assert_eq!(view.totals().cleanups, 1);
 }
 
 #[test]
