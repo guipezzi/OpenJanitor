@@ -547,7 +547,9 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: `Stop protecting ${folder.value}` }))
     await waitFor(() => expect(screen.queryByText(folder.value)).not.toBeInTheDocument())
     expect(unprotect).toHaveBeenCalledWith('folder', folder.value)
-    expect(screen.getByRole('status')).toHaveTextContent('show up again on the next scan')
+    // Other screens stay mounted with their own status lines.
+    const statuses = screen.getAllByRole('status').map((status) => status.textContent)
+    expect(statuses.some((text) => text?.includes('show up again on the next scan'))).toBe(true)
   })
 
   it('shows progress while scanning and can cancel', async () => {

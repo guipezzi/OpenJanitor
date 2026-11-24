@@ -98,6 +98,7 @@ fn run_scan(
     let system = SystemPaths::discover().map_err(|e| e.to_string())?;
     let deny = DenyList::new(&system).map_err(|e| e.to_string())?;
     let protected = crate::protected::load(&system.protected_list_path())?;
+    let settings = crate::settings::load_for("scanned")?;
     let scanner = Scanner {
         rules: &rules,
         vars: &EnvVars,
@@ -116,5 +117,7 @@ fn run_scan(
             last_sent = Some((progress.rule_index, Instant::now()));
         }
     };
-    Ok(scanner.scan_with(&ScanOptions::new(level), cancel, &mut on_progress))
+    let mut options = ScanOptions::new(level);
+    options.min_age_floor = Some(settings.min_age());
+    Ok(scanner.scan_with(&options, cancel, &mut on_progress))
 }

@@ -66,6 +66,7 @@ Commercial cleaners usually lock their most useful features behind a paywall. Op
 | D28 | Open apps        | While a browser or app runs, its cache is left out of the plan; the confirmation names it and offers "Check again". OpenJanitor never closes apps itself ([§6.1](#61-simple-clean-phase-1)) |
 | D29 | Quarantine actions | Restore conflicts are asked about once per restore (Replace, Keep both, or Skip, for all of them). Expired files are deleted at startup without asking, and the screen says so. "Delete now" and "Empty quarantine now" need the same tick as D27 ([§7.3](#73-quarantine-screen)) |
 | D30 | History retention | Per-file lines are kept for 90 days; after that, each cleanup keeps only its totals line, forever ([§4.8](#48-audit-log)) |
+| D31 | Settings         | Settings can only make cleaning more careful than the defaults: the minimum age never shortens a rule's own wait, and quarantine retention starts at 7 days (medium) and 30 days (review). A damaged `settings.json` stops scans and cleanups until it's fixed or reset; it never falls back to defaults silently. Changes save as soon as they're made ([§7.4](#74-other-screens)) |
 
 ## 4. Safety model
 
@@ -92,7 +93,7 @@ Always denied:
 
 - **Never follow reparse points** (junctions, symlinks, mount points). They're listed, never entered. Following a junction and deleting outside the target is a classic cleaner bug.
 - **Skip cloud placeholders entirely** (OneDrive and Google Drive Files On-Demand). Deleting a placeholder can delete the file in the cloud, and reading its contents forces a download. Detect them by attributes (`FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` 0x400000, `FILE_ATTRIBUTE_RECALL_ON_OPEN` 0x40000, `FILE_ATTRIBUTE_OFFLINE` 0x1000) and by cloud reparse tags. The scan reads metadata only and never opens file contents.
-- **Minimum age:** files modified more recently than the threshold are ignored, so in-progress installs aren't broken. The global default is 24h, configurable in Settings. Rules can declare their own default, and advanced mode allows per-category overrides.
+- **Minimum age:** files modified more recently than the threshold are ignored, so in-progress installs aren't broken. Each rule declares its own (24 hours for temp files and caches, 30 days for old logs and shader caches). The Settings choice (24 hours, 3, 7, or 30 days) is a floor: a rule waits for whichever is longer, so the setting can make cleaning stricter but never shortens a rule's wait (D31). Advanced mode may add per-category overrides later.
 - **Files in use** are skipped silently and reported as "in use" in the summary.
 - **Hard links:** deleting a file that has more than one link frees no space. Its size only counts when the link count is 1. (This is also why WinSxS looks bigger than it really is.)
 - **Size means size on disk** (allocated), not logical size, so compressed and sparse files don't inflate the "space freed" number.
@@ -128,7 +129,7 @@ Default policy per risk level (all configurable):
 | Medium                                 | Quarantine      | 7 days    |
 | Review (leftovers, Downloads)          | Quarantine      | 30 days   |
 
-A setting, "Always quarantine everything", exists for cautious users.
+Settings can lengthen the retention (medium: 7, 14, or 30 days; review: 30, 60, or 90 days) but never shorten it, and medium and review files are never deleted directly (D31). For cautious users, "Always use the quarantine" sends low-risk files to quarantine too, for the medium retention; nothing is freed until they expire or the quarantine is emptied, and the Settings screen says so. Changes apply to the next cleanup; files already in quarantine keep their dates.
 
 - **Quarantine doesn't free space until it's purged.** The UI shows both numbers, for example "Freed now: 5.5 GB · Will be freed on Dec 20: 3.9 GB", next to an "Empty quarantine now" button.
 - **One quarantine folder per volume**, so moving a file is an instant rename instead of a slow copy across drives. Files are never copied: a move that would cross drives is refused.
@@ -144,7 +145,7 @@ A setting, "Always quarantine everything", exists for cautious users.
 - **No content hash by default (D21).** Moving within a drive can't change the contents, and hashing means reading every byte (gigabytes for big caches). The stored file's identity is checked with size, modified time, and file ID instead. A BLAKE3 function exists in `oj-safety` for features that need one (checking a copy between drives, telling whether a restore conflict is the same file), and the manifest has an optional `hash` field.
 - **Crash-safe:** each step is written to the manifest before it happens ("moving in", "restoring"), and the manifest itself is replaced atomically. At startup, recovery checks every unfinished step and finds the file at its original path or in the batch. A file is never in neither place.
 - **Nothing in a manifest is trusted:** stored names must be exactly `items/` plus the item's number, restore destinations go through the deny list, and a stored file must still be the same file before it's restored or deleted.
-- **In practice, most simple-clean items skip quarantine:** they're low risk, so the default policy deletes them directly. Quarantine is used for medium and review items, and for everything when "Always quarantine everything" is on.
+- **In practice, most simple-clean items skip quarantine:** they're low risk, so the default policy deletes them directly. Quarantine is used for medium and review items, and for everything when "Always use the quarantine" is on.
 - **Restore conflicts:** if something exists at the original path again, the user picks Replace, Keep both ("name (restored).ext"), or Skip. Replace moves the current file into quarantine first (for 30 days), so nothing is lost (D23). Missing parent folders are recreated. The choice is asked once per restore and applies to every conflict in it (D29).
 - Expired items are purged when the app starts (and by scheduled cleaning, phase 4), after recovery and before the window can ask for anything. There's no prompt (D29): the dates were shown when the files went in, and the Quarantine screen says what was deleted. If the history file can't be opened, nothing is purged, so every deletion is on record. Unreadable batches are never touched. Expired items in the system quarantine need admin rights, so they wait for the next cleanup that already uses the helper, or for an "Empty (needs admin)" button; the app never shows a UAC prompt just for starting (D25).
 - The Quarantine screen reuses the results tree component, with Restore and Delete now actions.
@@ -369,7 +370,12 @@ Uses the same tree component, with **Restore** and **Delete now** actions. It sh
   - Opening an entry loads its files, a page at a time, with each one's result and, for skipped files, the reason. Entries older than 90 days say their file details are gone (D30).
   - The total freed counts real cleanups and quarantine deletions only, never test runs.
   - Lines that can't be read are counted and shown as a warning, and left as they are.
-- **Settings:** minimum age, quarantine policy and retention, excluded drives, advanced mode, theme, language
+- **Settings** (D31): one screen in three sections. Drives (PR 10), language (PR 12), and advanced mode (phase 2) join later.
+  - **Cleaning:** the minimum file age (24 hours, 3, 7, or 30 days), a floor on every rule's own ([§4.3](#43-traversal-rules)). It applies from the next scan.
+  - **Quarantine:** "Always use the quarantine" (off by default), and the retention for medium (7, 14, or 30 days) and review (30, 60, or 90 days) files ([§4.5](#45-quarantine)). It applies from the next cleanup.
+  - **Appearance:** the theme (system, light, or dark). The window's title bar follows it too.
+  - **Storage:** `settings.json` in `%LOCALAPPDATA%\OpenJanitor`, saved atomically, with a format version. Every change saves at once; there's no Save button. "Restore defaults" puts every setting back.
+  - **A damaged file fails closed,** like the Protected list: scanning and cleaning refuse and say why, and the Settings screen offers "Restore defaults". Falling back to defaults silently could make the app less careful than the user chose (deleting what they asked to quarantine). Only the theme falls back, to the system's. Values outside the choices above count as damage too.
 
 ### 7.5 Progressive disclosure
 
@@ -508,7 +514,7 @@ Small PRs in four blocks. Each one leaves the app working. The Clean button only
 7. **Quarantine and History screens**, and purging expired items at startup. Split in two:
    - **7a. Quarantine screen** ([§7.3](#73-quarantine-screen)): restore with conflict choices, delete now, empty, and deleting expired files at startup, all written to the history.
    - **7b. History screen** ([§7.4](#74-other-screens)): cleanups with their totals and files, the total space freed, and trimming old per-file lines (D30).
-8. **Settings.** Minimum age, quarantine policy and retention, "Always quarantine everything", and theme (system, light, dark).
+8. **Settings** ([§7.4](#74-other-screens)). Minimum age, quarantine policy and retention, "Always use the quarantine", and theme (system, light, dark), with D31's limits.
 9. **Recycle Bin** through the shell API.
 
 **D. Real Windows, then ship**

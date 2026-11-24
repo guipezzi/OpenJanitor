@@ -15,6 +15,7 @@ pub mod results;
 pub mod rule;
 pub mod running;
 pub mod scan;
+pub mod settings;
 pub mod vars;
 
 pub use clean::{
@@ -35,4 +36,5 @@ pub use results::{ChildPage, NodeId, NodeKind, NodeView, ScanResults};
 pub use rule::{App, CompiledRule, Level, Risk, Rule, RuleError, RuleSet};
 pub use running::RunningPrograms;
 pub use scan::{Finding, RuleReport, RuleStatus, ScanOptions, ScanProgress, ScanReport, Scanner};
+pub use settings::{Settings, SettingsChoices, SettingsError, Theme};
 pub use vars::{EnvVars, Vars};

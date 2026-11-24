@@ -131,6 +131,11 @@ impl SystemPaths {
         self.app_data.join("protected.json")
     }
 
+    /// Where the user's settings are saved (PLANNING.md §7.4).
+    pub fn settings_path(&self) -> PathBuf {
+        self.app_data.join("settings.json")
+    }
+
     /// Where the audit log is kept, one JSON line per action
     /// (PLANNING.md §4.8).
     pub fn history_path(&self) -> PathBuf {

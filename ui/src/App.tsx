@@ -9,6 +9,7 @@ import { HistoryScreen } from '@/components/history-screen'
 import { ProtectedScreen } from '@/components/protected-screen'
 import { QuarantineScreen } from '@/components/quarantine-screen'
 import { ResultsView } from '@/components/results-view'
+import { SettingsScreen } from '@/components/settings-screen'
 import { ScanProgressPanel } from '@/components/scan-progress'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -212,6 +213,9 @@ export default function App() {
         </div>
         <div className={cn('mx-auto max-w-4xl px-6 pt-6', screen !== 'protected' && 'hidden')}>
           <ProtectedScreen active={screen === 'protected'} onOverviewChange={setOverview} />
+        </div>
+        <div className={cn('mx-auto max-w-3xl px-6 pt-6', screen !== 'settings' && 'hidden')}>
+          <SettingsScreen active={screen === 'settings'} />
         </div>
       </main>
     </div>

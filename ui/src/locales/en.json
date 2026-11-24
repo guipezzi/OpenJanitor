@@ -8,7 +8,8 @@
     "clean": "Clean",
     "quarantine": "Quarantine",
     "history": "History",
-    "protected": "Protected"
+    "protected": "Protected",
+    "settings": "Settings"
   },
   "history": {
     "title": "History",
@@ -141,6 +142,45 @@
       "folder": "Folder",
       "pattern": "Pattern",
       "rule": "Rule"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "Changes are saved as soon as you make them.",
+    "saved": "Saved",
+    "loadError": "Couldn't open your settings",
+    "saveError": "Couldn't save that change",
+    "damaged": "Your settings couldn't be read",
+    "damagedHint": "Scanning and cleaning are paused until this is fixed, so nothing runs with settings you didn't choose. Restore the defaults, or fix the file and come back.",
+    "restore": "Restore defaults",
+    "restoreHint": "Puts every setting back the way it was when you installed OpenJanitor.",
+    "hours_one": "{{count, number}} hour",
+    "hours_other": "{{count, number}} hours",
+    "days_one": "{{count, number}} day",
+    "days_other": "{{count, number}} days",
+    "cleaning": {
+      "title": "Cleaning",
+      "minAge": "Minimum file age",
+      "minAgeHint": "Files changed more recently than this are never offered for cleaning. Rules that already wait longer, like old logs and shader caches (30 days), keep their own wait.",
+      "applies": "Takes effect on the next scan."
+    },
+    "quarantine": {
+      "title": "Quarantine",
+      "always": "Always use the quarantine",
+      "alwaysHint": "Low-risk files go to quarantine too, instead of being deleted right away, so you can restore them.",
+      "alwaysWarning": "Cleanups won't free space right away: it's freed when the files expire or when you empty the quarantine. Some caches take several gigabytes.",
+      "medium": "Keep medium-risk files for",
+      "mediumAlso": "Low-risk files are kept this long too.",
+      "review": "Keep files marked Review for",
+      "applies": "Takes effect on the next cleanup. Files already in quarantine keep their dates."
+    },
+    "appearance": {
+      "title": "Appearance",
+      "theme": "Theme",
+      "themeHint": "System follows the Windows setting.",
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark"
     }
   },
   "scan": {
