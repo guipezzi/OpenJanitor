@@ -2,8 +2,13 @@
 
 mod common;
 
-use common::{FakeMachine, old_file};
-use oj_core::{CancelToken, NodeKind, RuleSet, ScanProgress, ScanResults};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use common::{FakeMachine, old_file, set_age};
+use oj_core::{CancelToken, Level, NodeKind, RuleSet, ScanOptions, ScanProgress, ScanResults};
+
+const DAY: u64 = 24 * 60 * 60;
 
 fn bundled() -> RuleSet {
     RuleSet::bundled().unwrap()
@@ -142,6 +147,50 @@ fn protected_files_and_rules_are_left_out_of_the_scan() {
             .all(|f| !f.path.starts_with(temp.join("keep"))
                 && f.path.extension().is_none_or(|e| e != "psd"))
     );
+}
+
+#[test]
+fn the_minimum_age_setting_never_shortens_a_rules_own_wait() {
+    let m = FakeMachine::new();
+    let temp = m.system.local_app_data.join("Temp");
+    let logs = m.system.windows.join(r"Logs\CBS");
+    let aged = |path: PathBuf, days: u64| {
+        old_file(&path);
+        set_age(&path, Duration::from_secs(days * DAY));
+        path
+    };
+    let temp_2d = aged(temp.join("two-days.tmp"), 2);
+    let temp_8d = aged(temp.join("eight-days.tmp"), 8);
+    let log_8d = aged(logs.join("CbsPersist_1.log"), 8);
+    let log_40d = aged(logs.join("CbsPersist_2.log"), 40);
+
+    let found = |floor_days: u64| {
+        let mut options = ScanOptions::new(Level::Advanced);
+        options.min_age_floor = Some(Duration::from_secs(floor_days * DAY));
+        let mut paths: Vec<PathBuf> = m
+            .scan_options(&bundled(), &options)
+            .findings
+            .into_iter()
+            .map(|finding| finding.path)
+            .collect();
+        paths.sort();
+        paths
+    };
+    let sorted = |mut paths: Vec<PathBuf>| {
+        paths.sort();
+        paths
+    };
+
+    // 1 day: each rule's own wait (24 hours for temp, 30 days for logs).
+    assert_eq!(
+        found(1),
+        sorted(vec![temp_2d.clone(), temp_8d.clone(), log_40d.clone()])
+    );
+    // 7 days: temp files wait longer; logs keep their 30 days.
+    assert_eq!(found(7), sorted(vec![temp_8d, log_40d.clone()]));
+    assert!(!found(7).contains(&log_8d));
+    // 30 days: everything waits 30 days.
+    assert_eq!(found(30), vec![log_40d]);
 }
 
 #[test]

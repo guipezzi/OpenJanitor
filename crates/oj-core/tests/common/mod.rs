@@ -58,17 +58,31 @@ impl FakeMachine {
         cancel: &CancelToken,
         on_progress: &mut dyn FnMut(&ScanProgress),
     ) -> ScanReport {
-        self.scan_full(rules, &ProtectedList::new(), cancel, on_progress)
+        let options = ScanOptions::new(Level::Advanced);
+        self.scan_full(rules, &options, &ProtectedList::new(), cancel, on_progress)
+    }
+
+    /// Scans with options, such as the user's minimum age.
+    pub fn scan_options(&self, rules: &RuleSet, options: &ScanOptions) -> ScanReport {
+        self.scan_full(
+            rules,
+            options,
+            &ProtectedList::new(),
+            &CancelToken::new(),
+            &mut |_| {},
+        )
     }
 
     /// Scans with the user's Protected list.
     pub fn scan_protected(&self, rules: &RuleSet, protected: &ProtectedList) -> ScanReport {
-        self.scan_full(rules, protected, &CancelToken::new(), &mut |_| {})
+        let options = ScanOptions::new(Level::Advanced);
+        self.scan_full(rules, &options, protected, &CancelToken::new(), &mut |_| {})
     }
 
     fn scan_full(
         &self,
         rules: &RuleSet,
+        options: &ScanOptions,
         protected: &ProtectedList,
         cancel: &CancelToken,
         on_progress: &mut dyn FnMut(&ScanProgress),
@@ -80,7 +94,7 @@ impl FakeMachine {
             deny: &deny,
             protected,
         };
-        scanner.scan_with(&ScanOptions::new(Level::Advanced), cancel, on_progress)
+        scanner.scan_with(options, cancel, on_progress)
     }
 
     /// Paths found for one rule, sorted.

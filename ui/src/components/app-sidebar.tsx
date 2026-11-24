@@ -1,17 +1,18 @@
-import { Archive, BrushCleaning, History, Shield } from 'lucide-react'
+import { Archive, BrushCleaning, History, Settings, Shield } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Logo } from '@/components/logo'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
-export type Screen = 'clean' | 'quarantine' | 'history' | 'protected'
+export type Screen = 'clean' | 'quarantine' | 'history' | 'protected' | 'settings'
 
 const SCREENS: { id: Screen; icon: typeof Shield }[] = [
   { id: 'clean', icon: BrushCleaning },
   { id: 'quarantine', icon: Archive },
   { id: 'history', icon: History },
   { id: 'protected', icon: Shield },
+  { id: 'settings', icon: Settings },
 ]
 
 interface AppSidebarProps {
@@ -19,7 +20,7 @@ interface AppSidebarProps {
   onNavigate: (screen: Screen) => void
 }
 
-/** The app's screens. Settings joins later in phase 1. */
+/** The app's screens. */
 export function AppSidebar({ screen, onNavigate }: AppSidebarProps) {
   const { t } = useTranslation()
   return (

@@ -1,7 +1,7 @@
 //! OpenJanitor desktop app (PLANNING.md §5).
 //!
 //! The window runs the React UI from `ui/`. The commands here scan, manage
-//! the Protected list, and clean what the user confirmed. Nothing here
+//! the Protected list and the settings, and clean what the user confirmed. Nothing here
 //! deletes or moves a file itself: that's `oj-safety`'s job.
 
 // No console window in release builds.
@@ -13,6 +13,7 @@ mod commands;
 mod history;
 mod protected;
 mod quarantine;
+mod settings;
 mod state;
 
 fn main() {
@@ -25,6 +26,7 @@ fn main() {
             clean::recover_quarantine();
             quarantine::delete_expired_at_startup(app.handle());
             history::trim_at_startup();
+            settings::apply_theme_at_startup(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -48,6 +50,9 @@ fn main() {
             quarantine::delete_quarantined,
             history::history_overview,
             history::history_files,
+            settings::settings_overview,
+            settings::save_settings,
+            settings::reset_settings,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenJanitor");

@@ -33,8 +33,9 @@ pub enum Action {
     Quarantine { days: u32 },
 }
 
-/// What happens to each risk level (PLANNING.md §4.5). These are the
-/// defaults; Settings will change them.
+/// What happens to each risk level (PLANNING.md §4.5). `default()` is the
+/// built-in policy; [`Settings::policy`](crate::Settings::policy) builds
+/// the user's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Policy {
     pub low: Action,

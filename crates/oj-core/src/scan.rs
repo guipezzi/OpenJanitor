@@ -17,7 +17,11 @@ use crate::vars::{Vars, expand};
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     pub level: Level,
-    /// Overrides every rule's minimum age (the user's setting).
+    /// No rule uses a shorter minimum age than this (the user's setting,
+    /// D31). Rules that wait longer keep their own.
+    pub min_age_floor: Option<Duration>,
+    /// Replaces every rule's minimum age, floor included. For the CLI's
+    /// `--min-age` only.
     pub min_age_override: Option<Duration>,
     /// "Now", for age calculations. Tests can pin it.
     pub now: SystemTime,
@@ -27,6 +31,7 @@ impl ScanOptions {
     pub fn new(level: Level) -> Self {
         Self {
             level,
+            min_age_floor: None,
             min_age_override: None,
             now: SystemTime::now(),
         }
@@ -250,10 +255,10 @@ impl Scanner<'_> {
             return report;
         }
 
-        let min_age = options
-            .min_age_override
-            .or(compiled.min_age)
-            .unwrap_or(DEFAULT_MIN_AGE);
+        let min_age = options.min_age_override.unwrap_or_else(|| {
+            let own = compiled.min_age.unwrap_or(DEFAULT_MIN_AGE);
+            options.min_age_floor.map_or(own, |floor| own.max(floor))
+        });
 
         for root in report.roots.clone() {
             let stats = walk_files(&root, self.deny, cancel, |snapshot| {

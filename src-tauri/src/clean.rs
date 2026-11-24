@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
-use oj_core::{CleanProgress, CleanReport, Cleaner, History, NodeId, Policy, RunningPrograms};
+use oj_core::{CleanProgress, CleanReport, Cleaner, History, NodeId, RunningPrograms};
 use oj_safety::{DenyList, Executor, Mode, Store, SystemPaths};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -21,8 +21,9 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 /// More choices than this can't come from someone clicking through a tree.
 const MAX_CHOICES: usize = 100_000;
 
-/// Builds the cleanup plan for a selection of scan `scan_id`'s results:
-/// what will be deleted, what will be quarantined, and what's left out
+/// Builds the cleanup plan for a selection of scan `scan_id`'s results,
+/// with the user's quarantine settings: what will be deleted, what will
+/// be quarantined, and what's left out
 /// (including the caches of apps that are open right now). Changes
 /// nothing. Calling it again after closing an app is how "Check again"
 /// works.
@@ -36,11 +37,12 @@ pub fn plan_clean(
         return Err("The selection is too large.".into());
     }
     let choices: HashMap<NodeId, bool> = choices.into_iter().collect();
+    let settings = crate::settings::load_for("cleaned")?;
     let running = running_programs()?;
     state.plan_clean(
         scan_id,
         &choices,
-        &Policy::default(),
+        &settings.policy(),
         &running,
         Mode::from_env(),
         SystemTime::now(),

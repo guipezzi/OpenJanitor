@@ -132,6 +132,8 @@ pub struct AppState {
     /// Held while reading, changing, and saving the Protected list, so two
     /// changes can't overwrite each other.
     protected_file: Mutex<()>,
+    /// Held while saving the settings, for the same reason.
+    settings_file: Mutex<()>,
 }
 
 /// A panic while a lock was held leaves plain data behind, so carry on.
@@ -461,6 +463,10 @@ impl AppState {
     /// Serializes changes to the Protected list file.
     pub fn protected_file(&self) -> MutexGuard<'_, ()> {
         lock(&self.protected_file)
+    }
+
+    pub fn settings_file(&self) -> MutexGuard<'_, ()> {
+        lock(&self.settings_file)
     }
 
     fn with_results<T>(
