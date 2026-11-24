@@ -11,10 +11,16 @@
 //!   good on request (`delete`) or because its time was up (`expired`), or
 //!   a file moved into quarantine because a restore replaced it
 //!   (`replace`).
+//! - `quarantine_totals`: the totals of one restore or delete, written
+//!   last.
 //!
-//! Lines of one cleanup share its `cleanup` number (when it started, in
-//! milliseconds since the Unix epoch), and `mode` says whether it was a
-//! dry run. Times are in seconds since the Unix epoch.
+//! Lines of one cleanup share its `cleanup` number, and lines of one
+//! quarantine action share its `action_id` (both: when it started, in
+//! milliseconds since the Unix epoch). `mode` says whether it was a dry
+//! run. Times are in seconds since the Unix epoch.
+//!
+//! Totals lines are kept forever; the per-file lines are trimmed after
+//! [`crate::history_view::DETAIL_DAYS`] days (D30).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -22,9 +28,10 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use oj_safety::{Mode, Outcome};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::clean::{Action, CleanReport};
+use crate::quarantine::QuarantineReport;
 use crate::scan::Finding;
 
 /// The line format written by this version, in each line's `v`.
@@ -69,6 +76,7 @@ enum Line<'a> {
     },
     Quarantine {
         v: u32,
+        action_id: u64,
         at: u64,
         mode: Mode,
         action: QuarantineAction,
@@ -80,10 +88,19 @@ enum Line<'a> {
         #[serde(flatten)]
         outcome: &'a Outcome,
     },
+    QuarantineTotals {
+        v: u32,
+        action_id: u64,
+        action: QuarantineAction,
+        started_at: u64,
+        finished_at: u64,
+        #[serde(flatten)]
+        report: &'a QuarantineReport,
+    },
 }
 
 /// What happened to a quarantined file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuarantineAction {
     /// Moved back where it came from.
@@ -169,6 +186,7 @@ impl History {
 
     pub(crate) fn quarantine(
         &mut self,
+        action_id: u64,
         mode: Mode,
         action: QuarantineAction,
         file: &HeldFile,
@@ -176,6 +194,7 @@ impl History {
     ) {
         self.write(&Line::Quarantine {
             v: FORMAT_VERSION,
+            action_id,
             at: now(),
             mode,
             action,
@@ -184,6 +203,23 @@ impl History {
             path: file.path,
             size: file.size,
             outcome,
+        });
+    }
+
+    pub(crate) fn quarantine_totals(
+        &mut self,
+        action_id: u64,
+        action: QuarantineAction,
+        started_at: u64,
+        report: &QuarantineReport,
+    ) {
+        self.write(&Line::QuarantineTotals {
+            v: FORMAT_VERSION,
+            action_id,
+            action,
+            started_at,
+            finished_at: now(),
+            report,
         });
     }
 

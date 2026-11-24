@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { PathText } from '@/components/path-text'
 import { RiskBadge } from '@/components/risk-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -58,21 +59,10 @@ function KindIcon({ kind, open }: { kind: NodeKind; open: boolean }) {
   }
 }
 
-/**
- * A node's name. Folder and location names can be long paths that differ
- * only at the end, so the last part always shows and the rest is trimmed.
- */
+/** A node's name. Folder and location names can be long paths. */
 function NodeName({ kind, name }: { kind: NodeKind; name: string }) {
-  const cut = name.lastIndexOf('\\')
-  if ((kind !== 'folder' && kind !== 'location') || cut <= 0 || cut === name.length - 1) {
-    return <span className="truncate">{name}</span>
-  }
-  return (
-    <span className="flex min-w-0" title={name}>
-      <span className="truncate">{name.slice(0, cut + 1)}</span>
-      <span className="shrink-0">{name.slice(cut + 1)}</span>
-    </span>
-  )
+  if (kind === 'folder' || kind === 'location') return <PathText path={name} />
+  return <span className="truncate">{name}</span>
 }
 
 export function ResultsTree({

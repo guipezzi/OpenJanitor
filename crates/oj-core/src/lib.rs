@@ -9,6 +9,7 @@
 pub mod age;
 pub mod clean;
 pub mod history;
+pub mod history_view;
 pub mod quarantine;
 pub mod results;
 pub mod rule;
@@ -21,6 +22,10 @@ pub use clean::{
     QuarantineGroup, QuarantinedGroup, SkipCount, Tally,
 };
 pub use history::{History, QuarantineAction};
+pub use history_view::{
+    DETAIL_DAYS, EntryKind, HistoryEntry, HistoryFile, HistoryFilePage, HistoryTotals, HistoryView,
+    trim_history,
+};
 pub use oj_safety::CancelToken;
 pub use quarantine::{
     Conflicts, ItemRef, NextExpiry, QuarantineKeeper, QuarantineReport, QuarantineSummary,

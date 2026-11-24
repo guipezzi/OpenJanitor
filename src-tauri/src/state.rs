@@ -9,9 +9,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_core::{
-    CancelToken, ChildPage, ItemRef, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy,
-    QuarantineReport, QuarantineSummary, QuarantineView, RuleReport, RunningPrograms, ScanReport,
-    ScanResults,
+    CancelToken, ChildPage, DETAIL_DAYS, HistoryEntry, HistoryFilePage, HistoryTotals, HistoryView,
+    ItemRef, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy, QuarantineReport,
+    QuarantineSummary, QuarantineView, RuleReport, RunningPrograms, ScanReport, ScanResults,
 };
 use oj_safety::{Entry, EntryKind, Mode, ProtectedList};
 use serde::Serialize;
@@ -73,6 +73,19 @@ pub struct QuarantineOverview {
     pub expired: Option<ExpiredNote>,
 }
 
+/// What the History screen gets.
+#[derive(Debug, Serialize)]
+pub struct HistoryOverview {
+    /// Requests for an entry's files quote it.
+    pub view_id: u64,
+    /// Newest first.
+    pub entries: Vec<HistoryEntry>,
+    pub totals: HistoryTotals,
+    pub unreadable_lines: u64,
+    /// How long per-file details are kept.
+    pub detail_days: u64,
+}
+
 /// What deleting expired files at startup did.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExpiredNote {
@@ -114,6 +127,8 @@ pub struct AppState {
     /// The quarantine as the Quarantine screen last loaded it.
     quarantine: Mutex<Option<QuarantineView>>,
     expired: Mutex<Option<ExpiredNote>>,
+    /// The history as the History screen last loaded it.
+    history: Mutex<Option<HistoryView>>,
     /// Held while reading, changing, and saving the Protected list, so two
     /// changes can't overwrite each other.
     protected_file: Mutex<()>,
@@ -306,6 +321,37 @@ impl AppState {
     /// Records that the restore or delete ended.
     pub fn finish_quarantine(&self) {
         self.finish(Operation::Quarantine);
+    }
+
+    /// Keeps a freshly read history, replacing the last one, and returns
+    /// what the History screen shows.
+    pub fn show_history(&self, view: HistoryView) -> HistoryOverview {
+        let overview = HistoryOverview {
+            view_id: view.id(),
+            entries: view.entries().to_vec(),
+            totals: view.totals(),
+            unreadable_lines: view.unreadable_lines(),
+            detail_days: DETAIL_DAYS,
+        };
+        *lock(&self.history) = Some(view);
+        overview
+    }
+
+    /// One page of entry `entry`'s files from history view `view_id`.
+    pub fn history_files(
+        &self,
+        view_id: u64,
+        entry: u32,
+        offset: usize,
+        limit: usize,
+    ) -> Result<HistoryFilePage, String> {
+        let view = lock(&self.history);
+        let view = view
+            .as_ref()
+            .filter(|view| view.id() == view_id)
+            .ok_or("The history changed. Open it again.")?;
+        view.files(entry, offset, limit.min(MAX_PAGE))
+            .ok_or_else(|| format!("There's no entry {entry} in this history."))
     }
 
     /// Remembers what deleting expired files at startup did.
@@ -717,6 +763,36 @@ mod tests {
         });
         let overview = state.show_quarantine(empty_quarantine(), Mode::Live);
         assert_eq!(overview.expired.unwrap().report.done.files, 3);
+    }
+
+    #[test]
+    fn history_files_need_the_current_view() {
+        let state = AppState::default();
+        assert!(
+            state
+                .history_files(1, 0, 0, 10)
+                .unwrap_err()
+                .contains("Open it again")
+        );
+        let text =
+            r#"{"type":"cleanup","cleanup":1000,"mode":"live","deleted":{"files":1,"size":10}}"#;
+        let first = state.show_history(HistoryView::from_text(text));
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(first.totals.freed, 10);
+        assert_eq!(first.detail_days, DETAIL_DAYS);
+        let second = state.show_history(HistoryView::from_text(text));
+
+        assert!(state.history_files(first.view_id, 0, 0, 10).is_err());
+        assert_eq!(
+            state.history_files(second.view_id, 0, 0, 10).unwrap().total,
+            0
+        );
+        assert!(
+            state
+                .history_files(second.view_id, 5, 0, 10)
+                .unwrap_err()
+                .contains("no entry 5")
+        );
     }
 
     #[test]

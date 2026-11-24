@@ -390,16 +390,15 @@ impl QuarantineKeeper<'_> {
         if_exists: IfExists,
         now: SystemTime,
     ) -> QuarantineReport {
-        let mode = self.executor.mode();
-        let mut tally = Counter::default();
+        let mut run = Run::new(self.executor.mode(), QuarantineAction::Restore, now);
         let mut replaced = self.store.new_batch(now);
         let keep_replaced_for = Duration::from_secs(REPLACED_KEEP_DAYS * DAY);
         for (name, ids) in by_batch(items) {
-            let Some(mut batch) = self.open(name, ids.len(), &mut tally) else {
+            let Some(mut batch) = self.open(name, ids.len(), &mut run) else {
                 continue;
             };
             for id in ids {
-                let Some(item) = held(&batch, id, &mut tally) else {
+                let Some(item) = held(&batch, id, &mut run) else {
                     continue;
                 };
                 let outcome = self.executor.restore(
@@ -415,11 +414,11 @@ impl QuarantineKeeper<'_> {
                     outcome,
                     Outcome::Restored { .. } | Outcome::WouldRestore { .. }
                 ) {
-                    tally.done.files += 1;
-                    tally.done.size += item.reclaimable();
+                    run.done.files += 1;
+                    run.done.size += item.reclaimable();
                 }
-                tally.note(&outcome);
-                self.log(mode, QuarantineAction::Restore, name, &item, &outcome);
+                run.note(&outcome);
+                self.log(&run, QuarantineAction::Restore, name, &item, &outcome);
             }
         }
         // The files Replace moved aside are quarantined like any other.
@@ -430,7 +429,7 @@ impl QuarantineKeeper<'_> {
                     item: item.id,
                 };
                 self.log(
-                    mode,
+                    &run,
                     QuarantineAction::Replace,
                     replaced.name(),
                     item,
@@ -438,38 +437,35 @@ impl QuarantineKeeper<'_> {
                 );
             }
         }
-        tally.report(mode, self.history)
+        run.finish(self.history)
     }
 
     /// Deletes `items` for good.
     pub fn delete(&mut self, items: &[ItemRef]) -> QuarantineReport {
-        let mode = self.executor.mode();
-        let mut tally = Counter::default();
+        let mut run = Run::new(
+            self.executor.mode(),
+            QuarantineAction::Delete,
+            SystemTime::now(),
+        );
         for (name, ids) in by_batch(items) {
-            let Some(mut batch) = self.open(name, ids.len(), &mut tally) else {
+            let Some(mut batch) = self.open(name, ids.len(), &mut run) else {
                 continue;
             };
             for id in ids {
-                if let Some(item) = held(&batch, id, &mut tally) {
-                    self.delete_one(
-                        mode,
-                        QuarantineAction::Delete,
-                        &mut batch,
-                        &item,
-                        &mut tally,
-                    );
+                if let Some(item) = held(&batch, id, &mut run) {
+                    self.delete_one(&mut run, &mut batch, &item);
                 }
             }
         }
-        tally.report(mode, self.history)
+        run.finish(self.history)
     }
 
     /// Deletes every file whose time in quarantine is up. Run at startup.
-    /// Batches that can't be read are left alone.
+    /// Batches that can't be read are left alone. Writes nothing to the
+    /// history when nothing has expired.
     pub fn delete_expired(&mut self, now: SystemTime) -> io::Result<QuarantineReport> {
-        let mode = self.executor.mode();
+        let mut run = Run::new(self.executor.mode(), QuarantineAction::Expired, now);
         let now = unix_secs(now);
-        let mut tally = Counter::default();
         for name in self.store.batch_names()? {
             let Ok(mut batch) = self.store.open_batch(&name) else {
                 continue;
@@ -482,42 +478,32 @@ impl QuarantineKeeper<'_> {
                 .cloned()
                 .collect();
             for item in expired {
-                self.delete_one(
-                    mode,
-                    QuarantineAction::Expired,
-                    &mut batch,
-                    &item,
-                    &mut tally,
-                );
+                self.delete_one(&mut run, &mut batch, &item);
             }
         }
-        Ok(tally.report(mode, self.history))
+        if run.is_empty() {
+            return Ok(run.report());
+        }
+        Ok(run.finish(self.history))
     }
 
-    fn delete_one(
-        &mut self,
-        mode: Mode,
-        action: QuarantineAction,
-        batch: &mut Batch,
-        item: &Item,
-        tally: &mut Counter,
-    ) {
+    fn delete_one(&mut self, run: &mut Run, batch: &mut Batch, item: &Item) {
         let name = batch.name().to_owned();
         let outcome = self.executor.purge(batch, item.id);
         if let Outcome::Deleted { freed } | Outcome::WouldDelete { freed } = outcome {
-            tally.done.files += 1;
-            tally.done.size += freed;
+            run.done.files += 1;
+            run.done.size += freed;
         }
-        tally.note(&outcome);
-        self.log(mode, action, &name, item, &outcome);
+        run.note(&outcome);
+        self.log(run, run.action, &name, item, &outcome);
     }
 
     /// Opens a batch, or counts its `count` files as failed.
-    fn open(&self, name: &str, count: usize, tally: &mut Counter) -> Option<Batch> {
+    fn open(&self, name: &str, count: usize, run: &mut Run) -> Option<Batch> {
         match self.store.open_batch(name) {
             Ok(batch) => Some(batch),
             Err(_) => {
-                *tally.skipped.entry("failed").or_default() += count as u64;
+                *run.skipped.entry("failed").or_default() += count as u64;
                 None
             }
         }
@@ -525,7 +511,7 @@ impl QuarantineKeeper<'_> {
 
     fn log(
         &mut self,
-        mode: Mode,
+        run: &Run,
         action: QuarantineAction,
         batch: &str,
         item: &Item,
@@ -537,39 +523,58 @@ impl QuarantineKeeper<'_> {
             path: &item.original_path,
             size: item.reclaimable(),
         };
-        self.history.quarantine(mode, action, &file, outcome);
+        self.history
+            .quarantine(run.id, run.mode, action, &file, outcome);
     }
 }
 
 /// The item, if it's still in quarantine; otherwise it's counted as
 /// skipped.
-fn held(batch: &Batch, id: u32, tally: &mut Counter) -> Option<Item> {
+fn held(batch: &Batch, id: u32, run: &mut Run) -> Option<Item> {
     let item = batch
         .item(id)
         .filter(|item| item.state == ItemState::Quarantined)
         .cloned();
     if item.is_none() {
-        tally.note(&Outcome::Skipped {
+        run.note(&Outcome::Skipped {
             reason: SkipReason::NotInQuarantine,
         });
     }
     item
 }
 
-#[derive(Default)]
-struct Counter {
+/// One restore or delete under way: its id in the history, and its counts.
+struct Run {
+    /// When it started, in milliseconds since the Unix epoch.
+    id: u64,
+    mode: Mode,
+    action: QuarantineAction,
     done: Tally,
     skipped: BTreeMap<&'static str, u64>,
 }
 
-impl Counter {
+impl Run {
+    fn new(mode: Mode, action: QuarantineAction, now: SystemTime) -> Self {
+        Self {
+            id: unix_millis(now),
+            mode,
+            action,
+            done: Tally::default(),
+            skipped: BTreeMap::new(),
+        }
+    }
+
     fn note(&mut self, outcome: &Outcome) {
         if let Outcome::Skipped { reason } = outcome {
             *self.skipped.entry(reason.key()).or_default() += 1;
         }
     }
 
-    fn report(self, mode: Mode, history: &History) -> QuarantineReport {
+    fn is_empty(&self) -> bool {
+        self.done.files == 0 && self.skipped.is_empty()
+    }
+
+    fn report(self) -> QuarantineReport {
         let mut skipped: Vec<SkipCount> = self
             .skipped
             .into_iter()
@@ -577,14 +582,23 @@ impl Counter {
             .collect();
         skipped.sort_by_key(|count| Reverse(count.files));
         QuarantineReport {
-            mode,
+            mode: self.mode,
             done: self.done,
             skipped,
-            history_error: history.error().map(str::to_owned),
+            history_error: None,
         }
     }
-}
 
+    /// Writes the totals line, then reports, including whether the history
+    /// was written in full.
+    fn finish(self, history: &mut History) -> QuarantineReport {
+        let (id, action) = (self.id, self.action);
+        let mut report = self.report();
+        history.quarantine_totals(id, action, id / 1000, &report);
+        report.history_error = history.error().map(str::to_owned);
+        report
+    }
+}
 /// Items grouped by batch, each batch once, in a stable order.
 fn by_batch(items: &[ItemRef]) -> BTreeMap<&str, Vec<u32>> {
     let mut groups: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
@@ -592,6 +606,12 @@ fn by_batch(items: &[ItemRef]) -> BTreeMap<&str, Vec<u32>> {
         groups.entry(item.batch.as_str()).or_default().push(item.id);
     }
     groups
+}
+
+fn unix_millis(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 fn unix_secs(time: SystemTime) -> u64 {

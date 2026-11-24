@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { AppSidebar, type Screen } from '@/components/app-sidebar'
 import { CleanProgressPanel } from '@/components/clean-progress'
 import { CleanSummary } from '@/components/clean-summary'
+import { HistoryScreen } from '@/components/history-screen'
 import { ProtectedScreen } from '@/components/protected-screen'
 import { QuarantineScreen } from '@/components/quarantine-screen'
 import { ResultsView } from '@/components/results-view'
@@ -205,6 +206,9 @@ export default function App() {
         </div>
         <div className={cn('mx-auto max-w-6xl px-6 pt-6', screen !== 'quarantine' && 'hidden')}>
           <QuarantineScreen active={screen === 'quarantine'} />
+        </div>
+        <div className={cn('mx-auto max-w-5xl px-6 pt-6', screen !== 'history' && 'hidden')}>
+          <HistoryScreen active={screen === 'history'} />
         </div>
         <div className={cn('mx-auto max-w-4xl px-6 pt-6', screen !== 'protected' && 'hidden')}>
           <ProtectedScreen active={screen === 'protected'} onOverviewChange={setOverview} />

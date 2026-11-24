@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::attrs::{EntryClass, classify_metadata};
 use crate::deny::{DenyList, DenyReason};
@@ -16,7 +16,7 @@ use crate::protected::{Entry, EntryKind, ProtectedList};
 use crate::snapshot::FileSnapshot;
 
 /// Whether destructive operations really happen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// Report what would happen, change nothing.
