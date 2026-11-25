@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::{FakeMachine, junction, new_file, old_file, set_age, write_file};
-use oj_core::{RuleSet, RuleStatus};
+use oj_core::{Plan, Policy, RuleSet, RuleStatus, RunningPrograms, ScanResults, Target};
+use oj_safety::ProtectedList;
 
 fn bundled() -> RuleSet {
     RuleSet::bundled().unwrap()
@@ -131,6 +132,12 @@ fn missing_locations_are_reported_not_failed() {
     let m = FakeMachine::new();
     let report = m.scan(&bundled());
     for rule in &report.rules {
+        if rule.builtin.is_some() {
+            // The Recycle Bin is always there, empty on a fresh machine.
+            assert_eq!(rule.status, RuleStatus::Scanned, "{}", rule.rule_id);
+            assert_eq!(rule.findings, 0);
+            continue;
+        }
         assert!(
             matches!(
                 rule.status,
@@ -169,6 +176,7 @@ fn every_bundled_rule_has_a_fixture_test() {
         "app.teams.cache",
         "app.slack.cache",
         "app.vscode.cache",
+        "windows.recycle-bin",
     ];
     let bundled: Vec<String> = bundled().iter().map(|r| r.rule.id.clone()).collect();
     assert_eq!(bundled, tested);
@@ -292,14 +300,14 @@ fn shader_caches_skip_files_used_in_the_last_30_days() {
 }
 
 #[test]
-fn driver_shader_caches_are_low_risk_but_not_recommended() {
+fn driver_shader_caches_and_the_recycle_bin_are_low_risk_but_not_recommended() {
     for compiled in bundled().iter() {
         let rule = &compiled.rule;
-        let is_driver_cache = rule.id.starts_with("gpu.");
-        if is_driver_cache {
+        let opts_out = rule.id.starts_with("gpu.") || rule.id == "windows.recycle-bin";
+        if opts_out {
             assert_eq!(rule.risk, oj_core::Risk::Low, "{}", rule.id);
         }
-        assert_eq!(rule.recommended, !is_driver_cache, "{}", rule.id);
+        assert_eq!(rule.recommended, !opts_out, "{}", rule.id);
     }
 }
 
@@ -564,4 +572,98 @@ fn vscode_cache_leaves_settings_and_unsaved_work_alone() {
             (code.join(r"logs\20261120T101010\main.log"), false),
         ],
     );
+}
+
+// ----- Recycle Bin -----
+
+#[test]
+fn recycle_bin_is_one_finding_for_the_system_drive() {
+    let m = FakeMachine::new();
+    m.bin.set('C', 42, 1_500_000);
+    m.bin.set('D', 7, 70_000);
+
+    let report = m.scan(&bundled());
+    let rule = report
+        .rules
+        .iter()
+        .find(|r| r.rule_id == "windows.recycle-bin")
+        .unwrap();
+    assert_eq!(rule.status, RuleStatus::Scanned);
+    assert_eq!(rule.builtin.as_deref(), Some("recycle-bin"));
+    assert_eq!(rule.roots, [PathBuf::from(r"C:\$Recycle.Bin")]);
+    assert_eq!((rule.findings, rule.size_on_disk), (1, 1_500_000));
+
+    let bins: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.rule_id == "windows.recycle-bin")
+        .collect();
+    assert_eq!(
+        bins.len(),
+        1,
+        "only the system drive, until drive selection"
+    );
+    let bin = bins[0];
+    assert_eq!(bin.path, PathBuf::from(r"C:\$Recycle.Bin"));
+    assert_eq!((bin.file_count, bin.size_on_disk), (42, 1_500_000));
+    assert!(matches!(
+        bin.target,
+        Target::RecycleBin { drive: 'C', contents } if contents.items == 42
+    ));
+}
+
+#[test]
+fn recycle_bin_ignores_the_minimum_age_but_is_never_preselected() {
+    let m = FakeMachine::new();
+    m.bin.set('C', 1, 100);
+    let mut options = oj_core::ScanOptions::new(oj_core::Level::Simple);
+    options.min_age_floor = Some(Duration::from_secs(30 * 24 * 60 * 60));
+    let results = ScanResults::new(m.scan_options(&bundled(), &options));
+
+    let category = results
+        .categories()
+        .into_iter()
+        .find(|c| c.name == "recycle-bin")
+        .expect("emptied as a whole, however recent");
+    assert_eq!(category.builtin.as_deref(), Some("recycle-bin"));
+    let rule = &category.children.as_ref().unwrap()[0];
+    assert_eq!(rule.recommended, Some(false));
+    let drive = &results.children(rule.id, 0, 10).unwrap().items[0];
+    assert_eq!(drive.kind, oj_core::NodeKind::RecycleBin);
+    assert_eq!((drive.name.as_str(), drive.file_count), ("C:", 1));
+    assert!(!drive.has_children);
+
+    let plan = Plan::build(
+        &results,
+        &std::collections::HashMap::from([(drive.id, true)]),
+        &Policy::default(),
+        &RunningPrograms::default(),
+    );
+    assert_eq!(plan.summary().recycle_bins.len(), 1);
+    assert_eq!(plan.summary().files(), 0, "it isn't counted as files");
+}
+
+#[test]
+fn recycle_bin_finds_nothing_when_empty_or_protected() {
+    let m = FakeMachine::new();
+    let found = |m: &FakeMachine, protected: &ProtectedList| {
+        m.scan_protected(&bundled(), protected)
+            .rules
+            .into_iter()
+            .find(|r| r.rule_id == "windows.recycle-bin")
+            .unwrap()
+    };
+    let empty = found(&m, &ProtectedList::new());
+    assert_eq!((empty.status, empty.findings), (RuleStatus::Scanned, 0));
+
+    m.bin.set('C', 3, 300);
+    let protected = ProtectedList::from_entries(vec![oj_safety::Entry {
+        kind: oj_safety::EntryKind::Rule,
+        value: "windows.recycle-bin".into(),
+        label: None,
+        added_at: 0,
+    }])
+    .unwrap();
+    let report = found(&m, &protected);
+    assert_eq!((report.status, report.findings), (RuleStatus::Protected, 0));
 }

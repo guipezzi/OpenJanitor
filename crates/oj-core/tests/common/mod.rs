@@ -10,18 +10,20 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use oj_core::{CancelToken, Level, RuleSet, ScanOptions, ScanProgress, ScanReport, Scanner};
-use oj_safety::{DenyList, ProtectedList, SystemPaths};
+use oj_safety::{DenyList, FakeRecycleBin, ProtectedList, SystemPaths};
 use tempfile::TempDir;
 
 pub const OLD: Duration = Duration::from_secs(3 * 24 * 60 * 60);
 
 /// A fake machine: a temp folder laid out like `SystemPaths::fake`, with
-/// the rule variables pointing into it.
+/// the rule variables pointing into it, and a fake Recycle Bin (empty until
+/// a test fills it) on its system drive `C:`.
 pub struct FakeMachine {
     _dir: TempDir,
     pub root: PathBuf,
     pub system: SystemPaths,
     pub vars: HashMap<String, PathBuf>,
+    pub bin: FakeRecycleBin,
 }
 
 impl FakeMachine {
@@ -39,12 +41,14 @@ impl FakeMachine {
             ("WINDIR".into(), system.windows.clone()),
             ("SYSTEMROOT".into(), system.windows.clone()),
             ("PROGRAMDATA".into(), system.program_data.clone()),
+            ("SYSTEMDRIVE".into(), PathBuf::from("C:")),
         ]);
         Self {
             _dir: dir,
             root,
             system,
             vars,
+            bin: FakeRecycleBin::new(),
         }
     }
 
@@ -93,6 +97,7 @@ impl FakeMachine {
             vars: &self.vars,
             deny: &deny,
             protected,
+            recycle_bin: &self.bin,
         };
         scanner.scan_with(options, cancel, on_progress)
     }

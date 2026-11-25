@@ -42,6 +42,8 @@ export type FileResult =
 export interface HistoryFile {
   path: string
   size: number
+  /** For a Recycle Bin: the items in it. */
+  items?: number
   result: FileResult
   /** Why it was skipped. */
   reason?: SkipReason

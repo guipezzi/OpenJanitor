@@ -3,13 +3,14 @@
 //! The UI sends its selection as node ids from the last scan, never paths.
 //! `plan_clean` turns it into a plan for the confirmation; `run_clean` runs
 //! exactly that plan, by its id. Every file operation goes through
-//! `oj-safety`, which checks each file again right before touching it.
+//! `oj-safety`, which checks each file (and the Recycle Bin) again right
+//! before touching it.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime};
 
 use oj_core::{CleanProgress, CleanReport, Cleaner, History, NodeId, RunningPrograms};
-use oj_safety::{DenyList, Executor, Mode, Store, SystemPaths};
+use oj_safety::{DenyList, Executor, Mode, Store, SystemPaths, WindowsRecycleBin};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
@@ -93,7 +94,9 @@ fn clean(
     let mut history = History::open(&system.history_path())
         .map_err(|e| format!("Couldn't open the history file: {e}. {unchanged}"))?;
     let running = running_programs().map_err(|e| format!("{e}. {unchanged}"))?;
-    let executor = Executor::new(Mode::from_env(), &deny).with_protected_list(protected);
+    let executor = Executor::new(Mode::from_env(), &deny)
+        .with_protected_list(protected)
+        .with_recycle_bin(&WindowsRecycleBin);
     let store = Store::new(system.personal_quarantine());
 
     let state = app.state::<AppState>();

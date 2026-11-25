@@ -4,7 +4,8 @@
 //! A plan is fixed once it's built, and the confirmation shows it. Running
 //! it never adds a file: each one is checked again right before it's
 //! touched, and anything that changed since the scan is skipped. So the
-//! list the user confirmed can only get shorter.
+//! list the user confirmed can only get shorter. A Recycle Bin is emptied
+//! as a whole, and only if it still holds what the scan saw (D32).
 //!
 //! Every file operation goes through the [`Executor`] in `oj-safety`.
 
@@ -13,13 +14,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use oj_safety::{CancelToken, Executor, Mode, Outcome, SkipReason, Store};
+use oj_safety::{Batch, CancelToken, Executor, Mode, Outcome, SkipReason, Store};
 use serde::{Deserialize, Serialize};
 
 use crate::history::History;
 use crate::results::{NodeId, ScanResults};
 use crate::rule::Risk;
 use crate::running::RunningPrograms;
+use crate::scan::{Finding, Target};
 
 const DAY: u64 = 24 * 60 * 60;
 
@@ -85,6 +87,24 @@ pub struct QuarantineGroup {
     pub size: u64,
 }
 
+/// One drive's Recycle Bin, in totals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BinTally {
+    /// Its drive letter, such as `C`.
+    pub drive: char,
+    /// Items in it. A deleted folder counts as one, whatever is inside.
+    pub items: u64,
+    pub size: u64,
+}
+
+/// A Recycle Bin a cleanup left alone, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BinSkip {
+    pub drive: char,
+    /// [`oj_safety::SkipReason::key`], such as `changed`.
+    pub reason: &'static str,
+}
+
 /// Selected files left out because their app is open.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OpenApp {
@@ -97,8 +117,10 @@ pub struct OpenApp {
 /// A plan in totals: what the confirmation shows.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PlanSummary {
-    /// Deleted for good.
+    /// Files deleted for good.
     pub delete: Tally,
+    /// Recycle Bins emptied for good, each as a whole (D32).
+    pub recycle_bins: Vec<BinTally>,
     /// Moved to quarantine, shortest stay first.
     pub quarantine: Vec<QuarantineGroup>,
     /// Selected, but left out: cleaning them needs administrator rights,
@@ -107,10 +129,13 @@ pub struct PlanSummary {
     /// Selected, but left out: their app is open (PLANNING.md §6.1).
     /// Biggest first.
     pub apps_open: Vec<OpenApp>,
+    /// Selected, but left out: "Always use the quarantine" is on, and a
+    /// Recycle Bin can't go to quarantine (D32).
+    pub recycle_bins_kept: Vec<BinTally>,
 }
 
 impl PlanSummary {
-    /// Files the plan will act on.
+    /// Files the plan will act on, not counting Recycle Bins.
     pub fn files(&self) -> u64 {
         self.delete.files + self.quarantine.iter().map(|g| g.files).sum::<u64>()
     }
@@ -153,6 +178,23 @@ impl Plan {
                 continue;
             }
             let action = policy.action(finding.risk);
+            if let Target::RecycleBin { drive, contents } = finding.target {
+                let bin = BinTally {
+                    drive,
+                    items: contents.items,
+                    size: contents.size,
+                };
+                match action {
+                    Action::Delete => {
+                        summary.recycle_bins.push(bin);
+                        items.push((index, action));
+                    }
+                    // Whoever asked for the quarantine asked for nothing to
+                    // be deleted directly.
+                    Action::Quarantine { .. } => summary.recycle_bins_kept.push(bin),
+                }
+                continue;
+            }
             match action {
                 Action::Delete => summary.delete.add(finding.size_on_disk),
                 Action::Quarantine { days } => {
@@ -202,10 +244,10 @@ impl Plan {
 /// Where a running cleanup is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CleanProgress {
-    /// Files handled so far, out of `total`.
+    /// Files (and Recycle Bins) handled so far, out of `total`.
     pub done: u64,
     pub total: u64,
-    /// Space freed so far.
+    /// Space freed so far, Recycle Bins included.
     pub freed: u64,
 }
 
@@ -233,9 +275,14 @@ pub struct CleanReport {
     pub mode: Mode,
     /// Stopped before the end. The `not_started` files weren't touched.
     pub cancelled: bool,
-    /// Deleted for good (in dry-run mode: would have been), and the space
-    /// that freed.
+    /// Files deleted for good (in dry-run mode: would have been), and the
+    /// space that freed.
     pub deleted: Tally,
+    /// Recycle Bins emptied (in dry-run mode: would have been). Their space
+    /// is freed too, but isn't in `deleted`.
+    pub recycle_bins: Vec<BinTally>,
+    /// Recycle Bins left alone, such as one that changed since the scan.
+    pub recycle_bins_skipped: Vec<BinSkip>,
     /// Moved to quarantine, shortest stay first. Their space comes back
     /// when they're deleted for good.
     pub quarantined: Vec<QuarantinedGroup>,
@@ -251,6 +298,9 @@ pub struct CleanReport {
     pub needs_admin: Tally,
     /// Selected files left out because their app was open.
     pub apps_open: Vec<OpenApp>,
+    /// Selected Recycle Bins left out because "Always use the quarantine"
+    /// is on.
+    pub recycle_bins_kept: Vec<BinTally>,
     /// The history couldn't be written in full.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_error: Option<String>,
@@ -293,6 +343,9 @@ impl Cleaner<'_> {
         let cleanup = unix_millis(now);
         let mut batch = self.store.new_batch(now);
         let mut deleted = Tally::default();
+        let mut freed = 0;
+        let mut recycle_bins = Vec::new();
+        let mut recycle_bins_skipped = Vec::new();
         let mut quarantined: BTreeMap<u32, Tally> = BTreeMap::new();
         let mut skipped: BTreeMap<&'static str, u64> = BTreeMap::new();
         // Folders that held a removed file, with the rule location above them.
@@ -310,47 +363,57 @@ impl Cleaner<'_> {
                     reason: SkipReason::AppRunning,
                 }
             } else {
-                match action {
-                    Action::Delete => self.executor.delete_file(&finding.snapshot),
-                    Action::Quarantine { days } => self.executor.quarantine_file(
-                        self.store,
-                        &mut batch,
-                        &finding.snapshot,
-                        &finding.rule_id,
-                        Duration::from_secs(u64::from(days) * DAY),
-                        now,
-                    ),
-                }
+                self.act(&mut batch, finding, action, now)
             };
-            match (&outcome, action) {
-                (Outcome::Deleted { freed } | Outcome::WouldDelete { freed }, _) => {
+            match (&finding.target, &outcome, action) {
+                (
+                    Target::RecycleBin { drive, contents },
+                    Outcome::Deleted { freed: size } | Outcome::WouldDelete { freed: size },
+                    _,
+                ) => {
+                    freed += size;
+                    recycle_bins.push(BinTally {
+                        drive: *drive,
+                        items: contents.items,
+                        size: *size,
+                    });
+                }
+                (Target::RecycleBin { drive, .. }, Outcome::Skipped { reason }, _) => {
+                    recycle_bins_skipped.push(BinSkip {
+                        drive: *drive,
+                        reason: reason.key(),
+                    });
+                }
+                (Target::RecycleBin { .. }, _, _) => {}
+                (_, Outcome::Deleted { freed: size } | Outcome::WouldDelete { freed: size }, _) => {
+                    freed += size;
                     deleted.files += 1;
-                    deleted.size += freed;
+                    deleted.size += size;
                 }
                 (
+                    _,
                     Outcome::Quarantined { .. } | Outcome::WouldQuarantine,
                     Action::Quarantine { days },
                 ) => quarantined
                     .entry(days)
                     .or_default()
                     .add(finding.size_on_disk),
-                (Outcome::Skipped { reason }, _) => *skipped.entry(reason.key()).or_default() += 1,
+                (_, Outcome::Skipped { reason }, _) => {
+                    *skipped.entry(reason.key()).or_default() += 1
+                }
                 _ => {}
             }
-            if matches!(
+            let removed = matches!(
                 outcome,
                 Outcome::Deleted { .. } | Outcome::Quarantined { .. }
-            ) {
+            );
+            if removed && matches!(finding.target, Target::File(_)) {
                 note_folders(&mut emptied, &finding.path, &finding.root);
             }
             self.history
                 .file_action(cleanup, mode, finding, action, &outcome);
             done += 1;
-            on_progress(&CleanProgress {
-                done,
-                total,
-                freed: deleted.size,
-            });
+            on_progress(&CleanProgress { done, total, freed });
         }
 
         let folders_removed = self.remove_emptied(emptied, cleanup, mode);
@@ -363,6 +426,8 @@ impl Cleaner<'_> {
             mode,
             cancelled: done < total,
             deleted,
+            recycle_bins,
+            recycle_bins_skipped,
             quarantined: quarantined
                 .into_iter()
                 .map(|(days, tally)| QuarantinedGroup {
@@ -378,6 +443,7 @@ impl Cleaner<'_> {
             folders_removed,
             needs_admin: plan.summary.needs_admin,
             apps_open: plan.summary.apps_open.clone(),
+            recycle_bins_kept: plan.summary.recycle_bins_kept.clone(),
             history_error: None,
         };
         self.history.cleanup(
@@ -388,6 +454,34 @@ impl Cleaner<'_> {
         );
         report.history_error = self.history.error().map(str::to_owned);
         report
+    }
+
+    /// Deletes, quarantines, or empties one plan item, through the executor.
+    fn act(
+        &self,
+        batch: &mut Batch,
+        finding: &Finding,
+        action: Action,
+        now: SystemTime,
+    ) -> Outcome {
+        match (&finding.target, action) {
+            (Target::File(snapshot), Action::Delete) => self.executor.delete_file(snapshot),
+            (Target::File(snapshot), Action::Quarantine { days }) => self.executor.quarantine_file(
+                self.store,
+                batch,
+                snapshot,
+                &finding.rule_id,
+                Duration::from_secs(u64::from(days) * DAY),
+                now,
+            ),
+            (Target::RecycleBin { drive, contents }, Action::Delete) => {
+                self.executor.empty_recycle_bin(*drive, *contents)
+            }
+            // Plans never ask for this.
+            (Target::RecycleBin { .. }, Action::Quarantine { .. }) => Outcome::Skipped {
+                reason: SkipReason::Failed("a Recycle Bin can't be moved to quarantine".into()),
+            },
+        }
     }
 
     /// Removes the emptied folders, deepest first, so a folder whose only

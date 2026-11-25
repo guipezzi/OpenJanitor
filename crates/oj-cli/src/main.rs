@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use oj_core::age::parse_age;
 use oj_core::{EnvVars, Finding, Level, RuleReport, RuleSet, ScanOptions, Scanner};
-use oj_safety::{DenyList, ProtectedList, SystemPaths};
+use oj_safety::{DenyList, ProtectedList, SystemPaths, WindowsRecycleBin};
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -131,6 +131,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 vars: &EnvVars,
                 deny: &deny,
                 protected: &protected,
+                // Only read: the CLI never empties anything.
+                recycle_bin: &WindowsRecycleBin,
             };
             let report = scanner.scan(&options);
             print_json(&ScanOutput {

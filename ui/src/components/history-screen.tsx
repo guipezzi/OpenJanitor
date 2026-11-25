@@ -229,6 +229,11 @@ function Entry({ viewId, entry, detailDays }: EntryProps) {
                       : t(`history.result.${file.result}`)}
                   </span>
                   <PathText path={file.path} className="flex-1 font-mono" />
+                  {file.items !== undefined && (
+                    <span className="shrink-0 text-muted-foreground tabular-nums">
+                      {t('history.items', { count: file.items })}
+                    </span>
+                  )}
                   <span className="w-20 shrink-0 text-right tabular-nums">
                     {file.result !== 'folder_removed' && formatBytes(file.size, locale)}
                   </span>

@@ -34,6 +34,7 @@ fn main() {
             commands::cancel_scan,
             commands::scan_children,
             commands::reveal_in_explorer,
+            commands::open_recycle_bin,
             protected::protected_entries,
             protected::protect_item,
             protected::protect_pattern,

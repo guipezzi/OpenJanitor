@@ -20,6 +20,7 @@ import {
 import {
   cancelScan,
   canScan,
+  openRecycleBin,
   revealInExplorer,
   scan,
   scanChildren,
@@ -53,6 +54,7 @@ vi.mock('./lib/scan', async (importOriginal) => ({
   cancelScan: vi.fn(() => Promise.resolve()),
   scanChildren: vi.fn(),
   revealInExplorer: vi.fn(() => Promise.resolve()),
+  openRecycleBin: vi.fn(() => Promise.resolve()),
 }))
 
 function rule(overrides: Partial<RuleReport>): RuleReport {
@@ -177,6 +179,8 @@ const plan: CleanPlan = {
   quarantine: [{ days: 7, files: 10, size: 1_048_576 }],
   needs_admin: { files: 47, size: 8_037_478 },
   apps_open: [],
+  recycle_bins: [],
+  recycle_bins_kept: [],
   scanned_at: Math.floor(Date.now() / 1000),
   stale: false,
 }
@@ -185,6 +189,8 @@ const cleaned: CleanReport = {
   mode: 'live',
   cancelled: false,
   deleted: { files: 1097, size: 199_000_000 },
+  recycle_bins: [],
+  recycle_bins_skipped: [],
   quarantined: [{ days: 7, files: 10, size: 1_048_576, expires_at: 1_764_345_600 }],
   batch: '20251121-160000',
   skipped: [{ reason: 'in_use', files: 3 }],
@@ -192,7 +198,11 @@ const cleaned: CleanReport = {
   folders_removed: 4,
   needs_admin: { files: 47, size: 8_037_478 },
   apps_open: [],
+  recycle_bins_kept: [],
 }
+
+/** The Recycle Bin on C:, as plans and reports show it. */
+const fullBin = { drive: 'C', items: 42, size: 1_500_000_000 }
 
 /** Scans, selects the recommended items, and opens the confirmation. */
 async function reviewing(withPlan: CleanPlan) {
@@ -265,6 +275,143 @@ describe('App', () => {
     ).toBeInTheDocument()
     expect(screen.queryByRole('tree')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scan again' })).toBeEnabled()
+  })
+
+  it('empties the Recycle Bin only after the tick, and says so', async () => {
+    const dialog = await reviewing({ ...plan, recycle_bins: [fullBin] })
+
+    expect(within(dialog).getByText('Recycle Bin emptied for good')).toBeInTheDocument()
+    expect(within(dialog).getByText('· Drive C: · 42 items · 1.4 GB')).toBeInTheDocument()
+    expect(within(dialog).getByText(/however recently it was deleted/)).toBeInTheDocument()
+    const confirm = within(dialog).getByRole('button', { name: 'Delete and quarantine' })
+    expect(confirm).toBeDisabled()
+    fireEvent.click(
+      within(dialog).getByRole('checkbox', {
+        name: 'I understand that 1,100 files and the 42 items in the Recycle Bin will be permanently deleted.',
+      }),
+    )
+
+    vi.mocked(runClean).mockResolvedValue({ ...cleaned, recycle_bins: [fullBin] })
+    fireEvent.click(confirm)
+    const summary = await screen.findByRole('region', { name: 'Cleanup finished' })
+    expect(within(summary).getByText('1.6 GB')).toBeInTheDocument()
+    expect(
+      within(summary).getByText('Emptied the Recycle Bin on drive C: (42 items, 1.4 GB).'),
+    ).toBeInTheDocument()
+    expect(within(summary).getByText('1,097 files deleted permanently')).toBeInTheDocument()
+  })
+
+  it('can empty just the Recycle Bin, and says when it was left alone', async () => {
+    const onlyBin: CleanPlan = {
+      ...plan,
+      delete: { files: 0, size: 0 },
+      quarantine: [],
+      recycle_bins: [fullBin],
+    }
+    const dialog = await reviewing(onlyBin)
+    expect(within(dialog).queryByText('Deleted permanently')).not.toBeInTheDocument()
+    const confirm = within(dialog).getByRole('button', { name: 'Delete permanently' })
+    expect(confirm).toBeDisabled()
+    fireEvent.click(
+      within(dialog).getByRole('checkbox', {
+        name: 'I understand that the 42 items in the Recycle Bin will be permanently deleted.',
+      }),
+    )
+
+    vi.mocked(runClean).mockResolvedValue({
+      ...cleaned,
+      deleted: { files: 0, size: 0 },
+      quarantined: [],
+      skipped: [],
+      recycle_bins_skipped: [{ drive: 'C', reason: 'changed' }],
+    })
+    fireEvent.click(confirm)
+    const summary = await screen.findByRole('region', { name: 'Cleanup finished' })
+    expect(
+      within(summary).getByText(
+        'Left the Recycle Bin on drive C: alone (Changed since the scan). Scan again to empty it.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('leaves the Recycle Bin out when everything goes to quarantine', async () => {
+    const careful: CleanPlan = {
+      ...plan,
+      delete: { files: 0, size: 0 },
+      quarantine: [{ days: 7, files: 1110, size: 201_048_576 }],
+      recycle_bins_kept: [fullBin],
+    }
+    const dialog = await reviewing(careful)
+    expect(within(dialog).getByText(/the Recycle Bin can’t be moved to quarantine/)).toBeInTheDocument()
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument()
+
+    vi.mocked(runClean).mockResolvedValue({ ...cleaned, recycle_bins_kept: [fullBin] })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to quarantine' }))
+    const summary = await screen.findByRole('region', { name: 'Cleanup finished' })
+    expect(
+      within(summary).getByText(
+        'Left the Recycle Bin on drive C: out, because “Always use the quarantine” is on.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the Recycle Bin in items and opens it instead of Explorer', async () => {
+    const bin = { rule_id: 'windows.recycle-bin', risk: 'low' as const, builtin: 'recycle-bin' }
+    const binRule = node(21, 'rule', 'Recycle Bin', 42, 1_500_000_000, { ...bin, recommended: false })
+    const drive = node(22, 'recycle_bin', 'C:', 42, 1_500_000_000, {
+      ...bin,
+      last_modified: 0,
+      has_children: false,
+      path: 'C:\\$Recycle.Bin',
+      evidence: ['Windows counts 42 items in the Recycle Bin on drive C:'],
+    })
+    vi.mocked(scan).mockResolvedValue({
+      status: 'completed',
+      overview: {
+        ...overview,
+        rules: [
+          ...overview.rules,
+          rule({
+            rule_id: 'windows.recycle-bin',
+            name: 'Recycle Bin',
+            category: 'recycle-bin',
+            recommended: false,
+            builtin: 'recycle-bin',
+            description: 'Files and folders you deleted.',
+            findings: 1,
+          }),
+        ],
+        categories: [
+          ...overview.categories,
+          node(20, 'category', 'recycle-bin', 42, 1_500_000_000, {
+            builtin: 'recycle-bin',
+            children: [binRule],
+          }),
+        ],
+      },
+    })
+    vi.mocked(scanChildren).mockResolvedValue({ items: [drive], total: 1 })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
+
+    expect(await screen.findByText('can be freed from 1,199 files')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Select recommended' }))
+    // Never preselected: the category and its rule share the name.
+    for (const box of screen.getAllByRole('checkbox', { name: 'Select Recycle Bin' })) {
+      expect(box).toHaveAttribute('aria-checked', 'false')
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Recycle Bin' }))
+    fireEvent.click(await screen.findByText('Drive C:'))
+    expect(screen.getAllByText('42 items').length).toBeGreaterThan(0)
+
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    expect(within(details).getByText('Items')).toBeInTheDocument()
+    expect(within(details).queryByText('Last modified')).not.toBeInTheDocument()
+    expect(within(details).queryByRole('button', { name: 'Open in Explorer' })).not.toBeInTheDocument()
+    expect(within(details).queryByRole('button', { name: 'Protect' })).not.toBeInTheDocument()
+    fireEvent.click(within(details).getByRole('button', { name: 'Open the Recycle Bin' }))
+    expect(openRecycleBin).toHaveBeenCalled()
+    expect(revealInExplorer).not.toHaveBeenCalled()
   })
 
   it('needs no extra tick when everything goes to quarantine, and can be cancelled', async () => {
@@ -478,7 +625,11 @@ describe('App', () => {
   })
 
   it('protects an item from its details and keeps the selection', async () => {
-    const withoutOldFile: ScanOverview = { ...overview, findings_total: 1156 }
+    const withoutOldFile: ScanOverview = {
+      ...overview,
+      findings_total: 1156,
+      categories: [{ ...overview.categories[0], file_count: 1146 }, overview.categories[1]],
+    }
     vi.mocked(protectItem).mockResolvedValue({ entries: [], overview: withoutOldFile, added: 1 })
     await scanned()
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select Windows temporary files' }))

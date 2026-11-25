@@ -10,7 +10,7 @@ use oj_core::{
     CancelToken, ChildPage, EnvVars, Level, NodeId, RuleSet, ScanOptions, ScanProgress, ScanReport,
     Scanner,
 };
-use oj_safety::{DenyList, SystemPaths};
+use oj_safety::{DenyList, SystemPaths, WindowsRecycleBin};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
@@ -89,6 +89,18 @@ pub fn reveal_in_explorer(
     Ok(())
 }
 
+/// Opens the Recycle Bin in File Explorer, so the user can check it or
+/// restore something before emptying it (D32).
+#[tauri::command]
+pub fn open_recycle_bin() -> Result<(), String> {
+    let windows = SystemPaths::discover().map_err(|e| e.to_string())?.windows;
+    Command::new(windows.join("explorer.exe"))
+        .arg("shell:RecycleBinFolder")
+        .spawn()
+        .map_err(|e| format!("Couldn't open the Recycle Bin: {e}"))?;
+    Ok(())
+}
+
 fn run_scan(
     level: Level,
     cancel: &CancelToken,
@@ -104,6 +116,8 @@ fn run_scan(
         vars: &EnvVars,
         deny: &deny,
         protected: &protected,
+        // Only read here; emptying happens in a cleanup.
+        recycle_bin: &WindowsRecycleBin,
     };
 
     let mut last_sent: Option<(usize, Instant)> = None;

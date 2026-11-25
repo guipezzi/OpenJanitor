@@ -1,4 +1,5 @@
-//! Revalidation and the actual delete (PLANNING.md §4.4).
+//! Revalidation and the actual delete (PLANNING.md §4.4), and emptying the
+//! Recycle Bin.
 //!
 //! Together with `quarantine`, this is the only place in OpenJanitor that
 //! removes or moves a file.
@@ -13,6 +14,7 @@ use crate::attrs::{EntryClass, classify_metadata};
 use crate::deny::{DenyList, DenyReason};
 use crate::path::NormPath;
 use crate::protected::{Entry, EntryKind, ProtectedList};
+use crate::recycle_bin::{BinContents, EmptyPermit, RecycleBin};
 use crate::snapshot::FileSnapshot;
 
 /// Whether destructive operations really happen.
@@ -76,7 +78,8 @@ pub enum SkipReason {
     Protected,
     /// It no longer exists.
     Missing,
-    /// Its size or modified time changed since the scan.
+    /// Its size or modified time changed since the scan. For a Recycle
+    /// Bin: what it holds changed.
     Changed,
     /// It's no longer a plain file or folder (for example, it became a
     /// junction).
@@ -129,6 +132,7 @@ pub struct Executor<'a> {
     mode: Mode,
     deny: &'a DenyList,
     protected: ProtectedList,
+    recycle_bin: Option<&'a dyn RecycleBin>,
 }
 
 impl<'a> Executor<'a> {
@@ -137,7 +141,17 @@ impl<'a> Executor<'a> {
             mode,
             deny,
             protected: ProtectedList::new(),
+            recycle_bin: None,
         }
+    }
+
+    /// Lets it empty Recycle Bins: the real ones
+    /// ([`WindowsRecycleBin`](crate::WindowsRecycleBin)) in the app, a fake
+    /// in tests. Without one, Recycle Bins are always left alone, so a test
+    /// can't empty the real one by accident.
+    pub fn with_recycle_bin(mut self, bin: &'a dyn RecycleBin) -> Self {
+        self.recycle_bin = Some(bin);
+        self
     }
 
     /// Uses the user's Protected list: nothing it covers is ever touched.
@@ -216,6 +230,46 @@ impl<'a> Executor<'a> {
             Err(e) => Outcome::Skipped {
                 reason: skip_reason_for(&e),
             },
+        }
+    }
+
+    /// Empties the signed-in user's Recycle Bin on `drive`, but only if it
+    /// still holds what the scan saw (`expected`: the same number of items
+    /// and the same size). Otherwise it's left alone, so a cleanup never
+    /// deletes more than its confirmation showed (D26). In dry-run mode,
+    /// reports what would happen.
+    ///
+    /// Windows has no "empty only if unchanged", so the check runs right
+    /// before the call. Only this drive is emptied, never the others.
+    pub fn empty_recycle_bin(&self, drive: char, expected: BinContents) -> Outcome {
+        let skipped = |reason| Outcome::Skipped { reason };
+        let Some(bin) = self.recycle_bin else {
+            return skipped(SkipReason::Failed(
+                "this cleanup can't empty Recycle Bins".into(),
+            ));
+        };
+        if !drive.is_ascii_alphabetic() {
+            return skipped(SkipReason::Failed(format!(
+                "{drive:?} is not a drive letter"
+            )));
+        }
+        let now = match bin.contents(drive) {
+            Ok(now) => now,
+            Err(e) => return skipped(skip_reason_for(&e)),
+        };
+        if now.items == 0 {
+            return skipped(SkipReason::Missing);
+        }
+        if now != expected {
+            return skipped(SkipReason::Changed);
+        }
+        let freed = expected.size;
+        if self.mode == Mode::DryRun {
+            return Outcome::WouldDelete { freed };
+        }
+        match bin.empty(drive, EmptyPermit::new()) {
+            Ok(()) => Outcome::Deleted { freed },
+            Err(e) => skipped(skip_reason_for(&e)),
         }
     }
 

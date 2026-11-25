@@ -10,8 +10,8 @@ use std::time::SystemTime;
 
 use common::{FakeMachine, new_file, old_file, write_file};
 use oj_core::{
-    CancelToken, CleanProgress, CleanReport, Cleaner, History, NodeId, Plan, Policy,
-    QuarantineGroup, RuleSet, RunningPrograms, ScanResults, SkipCount,
+    Action, BinSkip, BinTally, CancelToken, CleanProgress, CleanReport, Cleaner, History, NodeId,
+    Plan, Policy, QuarantineGroup, RuleSet, RunningPrograms, ScanResults, SkipCount,
 };
 use oj_safety::{DenyList, Executor, ItemState, Mode, Store};
 use serde_json::Value;
@@ -54,6 +54,16 @@ needs_admin = true
 paths       = ['%WINDIR%\Temp']
 name        = "System temp"
 description = "System temporary files"
+
+[[rule]]
+id          = "test.bin"
+category    = "recycle-bin"
+level       = "simple"
+risk        = "low"
+builtin     = "recycle-bin"
+recommended = false
+name        = "Recycle Bin"
+description = "Deleted files"
 "#;
 
 struct Machine {
@@ -70,6 +80,7 @@ struct Machine {
 ///   `busy\old.tmp` next to a new file the scan leaves alone
 /// - `Logs\app\old.log` (medium risk) and `Leftovers\thing.dat` (review)
 /// - `%WINDIR%\Temp\sys.tmp` (needs admin rights)
+/// - an empty Recycle Bin on `C:`, until a test fills it
 fn machine() -> Machine {
     let m = FakeMachine::new();
     let temp = m.system.local_app_data.join("Temp");
@@ -655,4 +666,170 @@ fn quarantine_groups_compare_by_days() {
         .map(|g: &QuarantineGroup| g.days)
         .collect();
     assert_eq!(days, [7, 30]);
+}
+
+// ----- Recycle Bin (D32) -----
+
+/// The plan for the Recycle Bin alone, with `policy`.
+fn bin_plan(results: &ScanResults, policy: &Policy) -> Plan {
+    let category = results
+        .categories()
+        .into_iter()
+        .find(|c| c.name == "recycle-bin")
+        .expect("the Recycle Bin holds something");
+    Plan::build(
+        results,
+        &HashMap::from([(category.id, true)]),
+        policy,
+        &nothing_running(),
+    )
+}
+
+const FIVE_ITEMS: BinTally = BinTally {
+    drive: 'C',
+    items: 5,
+    size: 50_000,
+};
+
+#[test]
+fn the_recycle_bin_is_emptied_whole_and_recorded() {
+    let machine = machine();
+    machine.m.bin.set('C', 5, 50_000);
+    let results = scan(&machine);
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
+    assert_eq!(plan.summary().recycle_bins, [FIVE_ITEMS]);
+    assert_eq!(plan.summary().delete.files, 4, "files are counted apart");
+    assert_eq!(plan.len(), 7, "6 files and the Recycle Bin");
+
+    let deny = deny(&machine);
+    let executor = Executor::new(Mode::Live, &deny).with_recycle_bin(&machine.m.bin);
+    let mut progress = Vec::new();
+    let (report, history) = run(
+        &machine,
+        &results,
+        &plan,
+        &executor,
+        &CancelToken::new(),
+        &mut |p| progress.push(p.clone()),
+    );
+
+    assert_eq!(machine.m.bin.emptied(), ['C']);
+    assert_eq!(report.recycle_bins, [FIVE_ITEMS]);
+    assert!(report.recycle_bins_skipped.is_empty());
+    assert_eq!(report.deleted.files, 4);
+    assert_eq!(
+        progress.last().unwrap().freed,
+        report.deleted.size + 50_000,
+        "progress counts the Recycle Bin's space"
+    );
+
+    let line = history.iter().find(|l| l["rule_id"] == "test.bin").unwrap();
+    assert_eq!(line["type"], "file");
+    assert_eq!(line["path"], r"C:\$Recycle.Bin");
+    assert_eq!(
+        (line["items"].as_u64(), line["size"].as_u64()),
+        (Some(5), Some(50_000))
+    );
+    assert_eq!(line["result"], "deleted");
+    let totals = history.last().unwrap();
+    assert_eq!(totals["recycle_bins"][0]["drive"], "C");
+    assert_eq!(totals["recycle_bins"][0]["items"], 5);
+
+    let view = oj_core::HistoryView::load(&machine.m.system.history_path()).unwrap();
+    let entry = &view.entries()[0];
+    assert_eq!(entry.freed, report.deleted.size + 50_000);
+    assert_eq!(entry.files, 6 + 5, "its items count as files");
+    let files = view.files(0, 0, 100).unwrap().items;
+    let bin = files.iter().find(|f| f.items.is_some()).unwrap();
+    assert_eq!((bin.items, bin.result.as_str()), (Some(5), "deleted"));
+}
+
+#[test]
+fn a_recycle_bin_that_changed_since_the_scan_is_left_alone() {
+    let machine = machine();
+    machine.m.bin.set('C', 5, 50_000);
+    let results = scan(&machine);
+    let plan = bin_plan(&results, &Policy::default());
+    // Something else was deleted after the scan: it must not go too.
+    machine.m.bin.set('C', 6, 60_000);
+
+    let deny = deny(&machine);
+    let executor = Executor::new(Mode::Live, &deny).with_recycle_bin(&machine.m.bin);
+    let (report, history) = run(
+        &machine,
+        &results,
+        &plan,
+        &executor,
+        &CancelToken::new(),
+        &mut |_| {},
+    );
+
+    assert!(machine.m.bin.emptied().is_empty());
+    assert!(report.recycle_bins.is_empty());
+    assert_eq!(
+        report.recycle_bins_skipped,
+        [BinSkip {
+            drive: 'C',
+            reason: "changed"
+        }]
+    );
+    assert!(report.skipped.is_empty(), "files are counted apart");
+    let line = history.iter().find(|l| l["rule_id"] == "test.bin").unwrap();
+    assert_eq!(line["result"], "skipped");
+}
+
+#[test]
+fn a_dry_run_leaves_the_recycle_bin_full() {
+    let machine = machine();
+    machine.m.bin.set('C', 5, 50_000);
+    let results = scan(&machine);
+    let plan = bin_plan(&results, &Policy::default());
+    let deny = deny(&machine);
+    let executor = Executor::new(Mode::DryRun, &deny).with_recycle_bin(&machine.m.bin);
+
+    let (report, _) = run(
+        &machine,
+        &results,
+        &plan,
+        &executor,
+        &CancelToken::new(),
+        &mut |_| {},
+    );
+
+    assert!(machine.m.bin.emptied().is_empty());
+    assert_eq!(report.recycle_bins, [FIVE_ITEMS], "what would be emptied");
+}
+
+#[test]
+fn always_using_the_quarantine_leaves_the_recycle_bin_out() {
+    let machine = machine();
+    machine.m.bin.set('C', 5, 50_000);
+    let results = scan(&machine);
+    let careful = Policy {
+        low: Action::Quarantine { days: 7 },
+        ..Policy::default()
+    };
+
+    let plan = bin_plan(&results, &careful);
+    assert!(plan.is_empty(), "it can't go to quarantine");
+    assert!(plan.summary().recycle_bins.is_empty());
+    assert_eq!(plan.summary().recycle_bins_kept, [FIVE_ITEMS]);
+
+    let deny = deny(&machine);
+    let executor = Executor::new(Mode::Live, &deny).with_recycle_bin(&machine.m.bin);
+    let (report, _) = run(
+        &machine,
+        &results,
+        &plan,
+        &executor,
+        &CancelToken::new(),
+        &mut |_| {},
+    );
+    assert!(machine.m.bin.emptied().is_empty());
+    assert_eq!(report.recycle_bins_kept, [FIVE_ITEMS]);
 }

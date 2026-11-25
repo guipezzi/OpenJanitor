@@ -39,8 +39,9 @@ fn bundled_rules_load() {
     let rules = RuleSet::bundled().expect("bundled rules must be valid");
     assert!(rules.len() >= 4);
     for compiled in rules.iter() {
+        // Builtins decide for themselves; the Recycle Bin is emptied whole.
         assert!(
-            compiled.min_age.is_some(),
+            compiled.min_age.is_some() || compiled.rule.builtin.is_some(),
             "{} should set min_age explicitly",
             compiled.rule.id
         );
@@ -105,6 +106,40 @@ fn rejects_paths_without_a_variable_or_with_traversal() {
 #[test]
 fn rejects_unknown_builtins() {
     assert_invalid(&with("builtin = 'format-c'"), "unknown builtin");
+}
+
+const BUILTIN: &str = r#"
+[[rule]]
+id = "test.bin"
+category = "recycle-bin"
+level = "simple"
+risk = "low"
+builtin = "recycle-bin"
+name = "Bin"
+description = "A builtin rule."
+"#;
+
+#[test]
+fn accepts_a_known_builtin_on_its_own() {
+    let rules = load(BUILTIN).unwrap();
+    let rule = &rules.iter().next().unwrap().rule;
+    assert_eq!(rule.builtin.as_deref(), Some("recycle-bin"));
+    assert!(rule.paths.is_empty());
+}
+
+#[test]
+fn a_builtin_takes_no_paths_patterns_or_ages() {
+    for extra in [
+        r"paths = ['%TEMP%']",
+        "include = ['*.tmp']",
+        "exclude = ['*.log']",
+        "min_age = '24h'",
+        r"detect = '%LOCALAPPDATA%\App'",
+        r#"app = { name = "Example", processes = ["example.exe"] }"#,
+    ] {
+        let toml = BUILTIN.replace("name = ", &format!("{extra}\nname = "));
+        assert_invalid(&toml, "a builtin rule doesn't take");
+    }
 }
 
 #[test]

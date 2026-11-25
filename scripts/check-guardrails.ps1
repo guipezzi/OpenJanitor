@@ -8,14 +8,17 @@
     every Cargo.toml / package.json for delete and move APIs.
 
     It also keeps the UI away from the file system: the Tauri file system and
-    shell plugins are banned, and the window's capabilities
-    (src-tauri/capabilities) can't grant fs or shell permissions. The UI can
-    only call the Rust commands in src-tauri.
+    shell plugins are banned, and the window's capabilities (the files in
+    src-tauri/capabilities, and any declared in src-tauri/tauri.conf.json)
+    can't grant fs or shell permissions. The UI can only call the Rust
+    commands in src-tauri.
 
-    One file outside oj-safety may hold a move call:
-    crates/oj-windows/src/file_move.rs, the raw Win32 move behind quarantine
-    (unsafe code must live in oj-windows). It's skipped here, and calling its
-    function (move_no_replace) anywhere outside oj-safety fails the check.
+    Two files outside oj-safety may hold such a call, because unsafe code must
+    live in oj-windows: crates/oj-windows/src/file_move.rs, the raw Win32 move
+    behind quarantine, and crates/oj-windows/src/recycle_bin.rs, the shell call
+    that empties the Recycle Bin. They're skipped here, and calling their
+    functions (move_no_replace, shell_empty_recycle_bin) anywhere outside
+    oj-safety fails the check.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -32,14 +35,19 @@ $patterns = @(
     '\bIFileOperation\b'
     '\bFileDispositionInfo(Ex)?\b'
     '\bfs\.(rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|rename|renameSync)\b'
+    '\bSHEmptyRecycleBin[AW]?\b'
     '\bmove_no_replace\b'
+    '\bshell_empty_recycle_bin\b'
     'tauri-plugin-fs'
     '@tauri-apps/plugin-fs'
     'tauri-plugin-shell'
     '@tauri-apps/plugin-shell'
-    '"(fs|shell):'
 )
 $regex = [string]::Join('|', $patterns)
+
+# Permissions only mean something where capabilities are declared. Elsewhere
+# the same text is harmless, such as Explorer's "shell:RecycleBinFolder".
+$permission = '"(fs|shell):'
 
 $excluded = @(
     (Join-Path $root 'crates\oj-safety')
@@ -48,22 +56,31 @@ $excluded = @(
     (Join-Path $root 'ui\dist')
     (Join-Path $root 'src-tauri\gen')
 )
-$allowedFile = Join-Path $root 'crates\oj-windows\src\file_move.rs'
+$allowedFiles = @(
+    (Join-Path $root 'crates\oj-windows\src\file_move.rs')
+    (Join-Path $root 'crates\oj-windows\src\recycle_bin.rs')
+)
+
+$capabilities = @(
+    Get-ChildItem -Path (Join-Path $root 'src-tauri\capabilities') -Recurse -File -ErrorAction SilentlyContinue
+    Get-Item -Path (Join-Path $root 'src-tauri\tauri.conf.json') -ErrorAction SilentlyContinue
+)
 
 $files = @(
     # Lockfiles too, so a banned plugin pulled in by another dependency is caught.
     Get-ChildItem -Path $root -Recurse -File -Include *.rs, *.ts, *.tsx, *.js, *.jsx, *.mjs, Cargo.toml, Cargo.lock, package.json, package-lock.json
-    Get-ChildItem -Path (Join-Path $root 'src-tauri\capabilities') -Recurse -File -ErrorAction SilentlyContinue
+    $capabilities
 ) |
     Where-Object {
         $path = $_.FullName
         -not ($excluded | Where-Object { $path.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) }) -and
-        -not $path.Equals($allowedFile, [StringComparison]::OrdinalIgnoreCase) -and
+        -not ($allowedFiles | Where-Object { $path.Equals($_, [StringComparison]::OrdinalIgnoreCase) }) -and
         $path -notmatch '\\node_modules\\'
     }
 
 $violations = foreach ($file in $files) {
-    Select-String -Path $file.FullName -Pattern $regex -AllMatches |
+    $pattern = if ($capabilities.FullName -contains $file.FullName) { "$regex|$permission" } else { $regex }
+    Select-String -Path $file.FullName -Pattern $pattern -AllMatches |
         ForEach-Object {
             $relative = $_.Path.Substring($root.Length + 1)
             "{0}:{1}: {2}" -f $relative, $_.LineNumber, $_.Line.Trim()

@@ -34,6 +34,8 @@ export interface RuleReport {
   /** Whether "Select recommended" may pick it (only if it's also low risk). */
   recommended: boolean
   needs_admin: boolean
+  /** The built-in action it runs instead of matching files, such as `recycle-bin`. */
+  builtin?: string
   /** While this app runs, the rule's files are left out of cleanups. */
   app?: App
   status: RuleStatus
@@ -60,8 +62,19 @@ export interface ScanProgress {
   size_on_disk: number
 }
 
-/** `batch` is one cleanup's files in quarantine (the quarantine tree only). */
-export type NodeKind = 'category' | 'rule' | 'location' | 'folder' | 'file' | 'batch'
+/**
+ * `recycle_bin` is one drive's Recycle Bin, cleaned as a whole; its name is
+ * the drive (`C:`). `batch` is one cleanup's files in quarantine (the
+ * quarantine tree only).
+ */
+export type NodeKind =
+  | 'category'
+  | 'rule'
+  | 'location'
+  | 'folder'
+  | 'file'
+  | 'recycle_bin'
+  | 'batch'
 
 /** One item of the results tree (oj_core::NodeView). */
 export interface NodeView {
@@ -71,10 +84,13 @@ export interface NodeView {
   rule_id?: string
   risk?: Risk
   recommended?: boolean
+  /** The rule's built-in action; a category has one when all its rules share it. */
+  builtin?: string
   needs_admin: boolean
   size_on_disk: number
+  /** For the Recycle Bin, the items in it. */
   file_count: number
-  /** Seconds since the Unix epoch. */
+  /** Seconds since the Unix epoch. 0 for the Recycle Bin. */
   last_modified: number
   /** For display only: commands take node ids, never paths. */
   path?: string
@@ -115,6 +131,11 @@ export function couldNotRead(rule: RuleReport): boolean {
   return rule.needs_admin && rule.walk.unreadable > 0
 }
 
+/** The Recycle Bin, or something made only of it: counted in items, not files. */
+export function isRecycleBin(node: NodeView): boolean {
+  return node.builtin === 'recycle-bin'
+}
+
 /** False when the UI runs in a plain browser instead of the Tauri window. */
 export function canScan(): boolean {
   return isTauri()
@@ -148,4 +169,9 @@ export function scanChildren(
 /** Shows a location, folder, or file from the results in File Explorer. */
 export function revealInExplorer(scanId: number, nodeId: number): Promise<void> {
   return invoke('reveal_in_explorer', { scanId, nodeId })
+}
+
+/** Opens the Recycle Bin in File Explorer, to check or restore something first. */
+export function openRecycleBin(): Promise<void> {
+  return invoke('open_recycle_bin')
 }

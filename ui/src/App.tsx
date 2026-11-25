@@ -139,7 +139,10 @@ export default function App() {
               {formatBytes(overview.size_on_disk_total, i18n.language)}
             </p>
             <p className="text-sm text-muted-foreground">
-              {t('scan.summary', { count: overview.findings_total })}
+              {/* Files, plus the Recycle Bin's items. */}
+              {t('scan.summary', {
+                count: overview.categories.reduce((sum, category) => sum + category.file_count, 0),
+              })}
             </p>
           </div>
           <p className="hidden max-w-56 items-center gap-2 text-xs text-muted-foreground md:flex">

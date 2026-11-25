@@ -39,11 +39,20 @@ const BUNDLED: &[(&str, &str)] = &[
         include_str!("../../../rules/browsers.toml"),
     ),
     ("apps.toml", include_str!("../../../rules/apps.toml")),
+    (
+        "recycle-bin.toml",
+        include_str!("../../../rules/recycle-bin.toml"),
+    ),
 ];
 
-/// Built-in actions rules may reference (DISM cleanup, emptying the Recycle
-/// Bin, …). None exist yet; they arrive with the cleanups that need them.
-pub const KNOWN_BUILTINS: &[&str] = &[];
+/// Emptying the signed-in user's Recycle Bin, through the Windows shell
+/// (D32).
+pub const RECYCLE_BIN: &str = "recycle-bin";
+
+/// Built-in actions rules may reference, implemented in Rust (PLANNING.md
+/// §5.3). More (such as DISM cleanup) arrive with the cleanups that need
+/// them. Rule files can't add any.
+pub const KNOWN_BUILTINS: &[&str] = &[RECYCLE_BIN];
 
 /// Which cleanup a rule belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +241,19 @@ fn compile(file: &str, rule: Rule) -> Result<CompiledRule, RuleError> {
     if rule.paths.is_empty() && rule.builtin.is_none() {
         return Err(invalid(
             "a rule needs at least one path or a builtin".into(),
+        ));
+    }
+    // A builtin decides for itself what it touches; nothing here can widen
+    // or narrow that.
+    let file_matching = !rule.paths.is_empty()
+        || rule.include != default_include()
+        || !rule.exclude.is_empty()
+        || rule.min_age.is_some()
+        || rule.detect.is_some()
+        || rule.app.is_some();
+    if rule.builtin.is_some() && file_matching {
+        return Err(invalid(
+            "a builtin rule doesn't take paths, include, exclude, min_age, detect, or app".into(),
         ));
     }
     if let Some(app) = &rule.app {

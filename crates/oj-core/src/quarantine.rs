@@ -310,6 +310,7 @@ impl QuarantineView {
             rule_id: node.rule_id.clone(),
             risk: None,
             recommended: None,
+            builtin: None,
             needs_admin: false,
             size_on_disk: node.size,
             file_count: node.files,

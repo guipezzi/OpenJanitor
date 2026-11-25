@@ -1,8 +1,9 @@
 //! Thin wrappers around the Windows APIs OpenJanitor needs.
 //!
-//! Almost everything here only reads information from the system. The one
-//! exception is the raw move primitive behind quarantine, kept alone in the
-//! [`file_move`] module. Only `oj-safety` may call it;
+//! Almost everything here only reads information from the system. The two
+//! exceptions are kept alone in their own modules: the raw move primitive
+//! behind quarantine ([`file_move`]) and the call that empties the Recycle
+//! Bin ([`recycle_bin`]). Only `oj-safety` may call them;
 //! `scripts/check-guardrails.ps1` enforces that.
 //!
 //! This is the only crate in the project allowed to use `unsafe` (for FFI);
@@ -11,6 +12,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod file_move;
+pub mod recycle_bin;
 
 /// Size and identity information that `std` doesn't expose on stable Rust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +59,17 @@ impl std::str::FromStr for FileId {
     }
 }
 
+/// What a drive's Recycle Bin holds for the signed-in user, as Windows
+/// counts it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct BinContents {
+    /// Deleted items. A deleted folder counts as one, whatever is inside.
+    pub items: u64,
+    /// Their size in bytes, as Windows reports it: the files' own size,
+    /// which can differ a little from the space they take on disk.
+    pub size: u64,
+}
+
 /// Folders the user can relocate, so they must be resolved through the shell
 /// API instead of being guessed from environment variables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,11 +89,11 @@ pub enum KnownFolder {
     Windows,
 }
 
-pub use imp::{disk_info, known_folder, long_path, running_programs};
+pub use imp::{disk_info, known_folder, long_path, recycle_bin_contents, running_programs};
 
 #[cfg(windows)]
 mod imp {
-    use super::{DiskInfo, FileId, KnownFolder};
+    use super::{BinContents, DiskInfo, FileId, KnownFolder};
     use std::ffi::{OsString, c_void};
     use std::io;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -103,7 +116,7 @@ mod imp {
         FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
         FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_ProgramData,
         FOLDERID_ProgramFiles, FOLDERID_ProgramFilesX86, FOLDERID_RoamingAppData, FOLDERID_Videos,
-        FOLDERID_Windows, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+        FOLDERID_Windows, KF_FLAG_DEFAULT, SHGetKnownFolderPath, SHQUERYRBINFO, SHQueryRecycleBinW,
     };
     use windows::core::{GUID, PCWSTR};
 
@@ -113,6 +126,20 @@ mod imp {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect()
+    }
+
+    /// `C:\` as a NUL-terminated UTF-16 string, for the Recycle Bin calls.
+    /// Only a letter is accepted: those calls treat an empty path as "every
+    /// drive".
+    pub(crate) fn drive_root(drive: char) -> io::Result<Vec<u16>> {
+        if !drive.is_ascii_alphabetic() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{drive:?} is not a drive letter"),
+            ));
+        }
+        let root = format!("{}:\\", drive.to_ascii_uppercase());
+        Ok(root.encode_utf16().chain(std::iter::once(0)).collect())
     }
 
     /// Turns a Windows error into an `io::Error` that carries the plain
@@ -280,6 +307,25 @@ mod imp {
         }
     }
 
+    /// What the signed-in user's Recycle Bin on `drive` (a letter, such as
+    /// `'C'`) holds. Only reads.
+    pub fn recycle_bin_contents(drive: char) -> io::Result<BinContents> {
+        let root = drive_root(drive)?;
+        let mut info = SHQUERYRBINFO {
+            cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+            i64Size: 0,
+            i64NumItems: 0,
+        };
+        // SAFETY: `root` is a NUL-terminated drive root that outlives the
+        // call (never empty, which would mean every drive), and `info` is a
+        // valid, writable SHQUERYRBINFO with cbSize set, as the API requires.
+        unsafe { SHQueryRecycleBinW(PCWSTR(root.as_ptr()), &mut info) }.map_err(win32_error)?;
+        Ok(BinContents {
+            items: u64::try_from(info.i64NumItems).unwrap_or(0),
+            size: u64::try_from(info.i64Size).unwrap_or(0),
+        })
+    }
+
     /// The Windows session a process runs in.
     fn session_of(process: u32) -> io::Result<u32> {
         let mut session = 0;
@@ -315,7 +361,7 @@ mod imp {
 /// supports Windows; these exist for tooling, not for real use.
 #[cfg(not(windows))]
 mod imp {
-    use super::{DiskInfo, FileId, KnownFolder};
+    use super::{BinContents, DiskInfo, FileId, KnownFolder};
     use std::io;
     use std::path::{Path, PathBuf};
 
@@ -340,6 +386,10 @@ mod imp {
     pub fn running_programs() -> io::Result<Vec<String>> {
         Ok(Vec::new())
     }
+
+    pub fn recycle_bin_contents(_drive: char) -> io::Result<BinContents> {
+        Ok(BinContents::default())
+    }
 }
 
 #[cfg(test)]
@@ -353,5 +403,21 @@ mod tests {
             running.iter().any(|p| p.to_lowercase() == name),
             "{name} not in {running:?}"
         );
+    }
+
+    #[test]
+    fn the_system_drive_recycle_bin_can_be_read() {
+        // Only reads: whatever is in it stays there.
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let letter = drive.chars().next().unwrap();
+        super::recycle_bin_contents(letter).unwrap();
+    }
+
+    #[test]
+    fn only_drive_letters_are_accepted() {
+        for drive in ['1', ':', '\\', ' ', 'é'] {
+            let error = super::recycle_bin_contents(drive).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{drive:?}");
+        }
     }
 }

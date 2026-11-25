@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   MapPin,
   ShieldAlert,
+  Trash2,
   TriangleAlert,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -19,7 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatBytes, formatDay } from '@/lib/format'
 import { useNodeLabel } from '@/lib/labels'
-import type { NodeKind, NodeView } from '@/lib/scan'
+import { isRecycleBin, type NodeKind, type NodeView } from '@/lib/scan'
 import { checkState, type CheckState, type Tally } from '@/lib/selection'
 import { PAGE_SIZE, type Row } from '@/lib/use-results-tree'
 import { cn } from '@/lib/utils'
@@ -54,6 +55,8 @@ function KindIcon({ kind, open }: { kind: NodeKind; open: boolean }) {
       return open ? <FolderOpen className={className} /> : <Folder className={className} />
     case 'file':
       return <File className={className} />
+    case 'recycle_bin':
+      return <Trash2 className={className} />
     case 'batch':
       return <Archive className={className} />
   }
@@ -162,7 +165,8 @@ export function ResultsTree({
               )}
             </button>
             <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground tabular-nums sm:block">
-              {node.kind !== 'file' && t('results.files', { count: node.file_count })}
+              {node.kind !== 'file' &&
+                t(isRecycleBin(node) ? 'results.items' : 'results.files', { count: node.file_count })}
             </span>
             {showExpiry && (
               <span className="hidden w-32 shrink-0 text-right text-xs text-muted-foreground tabular-nums md:block">

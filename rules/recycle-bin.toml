@@ -1,0 +1,20 @@
+# The Recycle Bin (PLANNING.md section 6.1 and D32).
+#
+# Emptied as a whole through the Windows shell, the way File Explorer does it.
+# `$Recycle.Bin` itself is never deleted by hand: the deny list refuses it.
+# Only the signed-in user's Recycle Bin on the system drive, for now; other
+# drives come with drive selection (D15).
+#
+# The minimum age doesn't apply: emptying takes everything in it, however
+# recently it was deleted. That's why it's never preselected, and the
+# details panel offers to open the Recycle Bin first.
+
+[[rule]]
+id          = "windows.recycle-bin"
+category    = "recycle-bin"
+level       = "simple"
+risk        = "low"
+builtin     = "recycle-bin"
+recommended = false
+name        = "Recycle Bin"
+description = "Files and folders you deleted. Emptying it deletes all of them for good, however recently they were deleted, so open it first if you might want something back."
