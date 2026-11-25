@@ -15,6 +15,15 @@ export interface QuarantineGroup {
   size: number
 }
 
+/** One drive's Recycle Bin, in totals. */
+export interface BinTally {
+  /** The drive letter, such as "C". */
+  drive: string
+  /** A deleted folder counts as one item, whatever is inside. */
+  items: number
+  size: number
+}
+
 /** Selected files left out because their app is open. */
 export interface OpenApp {
   /** Such as "Google Chrome". */
@@ -27,14 +36,18 @@ export interface OpenApp {
 export interface CleanPlan {
   plan_id: number
   mode: Mode
-  /** Deleted for good. */
+  /** Files deleted for good. */
   delete: Tally
+  /** Recycle Bins emptied for good, each as a whole. */
+  recycle_bins: BinTally[]
   /** Moved to quarantine, shortest stay first. */
   quarantine: QuarantineGroup[]
   /** Selected, but left out: they need administrator rights. */
   needs_admin: Tally
   /** Selected, but left out: their app is open. Biggest first. */
   apps_open: OpenApp[]
+  /** Selected, but left out: "Always use the quarantine" is on. */
+  recycle_bins_kept: BinTally[]
   /** When the scan finished, in seconds since the Unix epoch. */
   scanned_at: number
   /** The results are old enough that scanning again first is worth it. */
@@ -70,8 +83,12 @@ export interface CleanReport {
   mode: Mode
   /** Stopped early; `not_started` files weren't touched. */
   cancelled: boolean
-  /** Deleted for good (in a dry run: would have been). */
+  /** Files deleted for good (in a dry run: would have been). */
   deleted: Tally
+  /** Recycle Bins emptied (in a dry run: would have been). Not in `deleted`. */
+  recycle_bins: BinTally[]
+  /** Recycle Bins left alone, such as one that changed since the scan. */
+  recycle_bins_skipped: { drive: string; reason: SkipReason }[]
   /** In quarantine now. `expires_at` is in seconds since the Unix epoch. */
   quarantined: (QuarantineGroup & { expires_at: number })[]
   batch?: string
@@ -82,12 +99,25 @@ export interface CleanReport {
   needs_admin: Tally
   /** Left out because their app was open. */
   apps_open: OpenApp[]
+  /** Left out because "Always use the quarantine" is on. */
+  recycle_bins_kept: BinTally[]
   history_error?: string
 }
 
-/** Files the plan will act on. */
-export function plannedFiles(plan: CleanPlan): number {
-  return plan.delete.files + plan.quarantine.reduce((sum, group) => sum + group.files, 0)
+/** Whether the plan acts on anything: files, or a Recycle Bin. */
+export function plansAnything(plan: CleanPlan): boolean {
+  const files = plan.delete.files + plan.quarantine.reduce((sum, group) => sum + group.files, 0)
+  return files > 0 || plan.recycle_bins.length > 0
+}
+
+/** Items in the Recycle Bins a plan or a cleanup empties. */
+export function binItems(bins: readonly BinTally[]): number {
+  return bins.reduce((sum, bin) => sum + bin.items, 0)
+}
+
+/** Space a cleanup freed for good: deleted files plus emptied Recycle Bins. */
+export function freedBy(report: CleanReport): number {
+  return report.deleted.size + report.recycle_bins.reduce((sum, bin) => sum + bin.size, 0)
 }
 
 /** Builds the plan for the current selection. Changes nothing. */

@@ -14,7 +14,7 @@ use oj_safety::ProtectedList;
 use serde::Serialize;
 
 use crate::rule::Risk;
-use crate::scan::{Finding, ScanReport};
+use crate::scan::{Finding, ScanReport, Target};
 
 /// A node's number, valid for the results it came from.
 pub type NodeId = u32;
@@ -29,6 +29,9 @@ pub enum NodeKind {
     Location,
     Folder,
     File,
+    /// One drive's Recycle Bin. Like a file, it's cleaned as a whole; its
+    /// name is the drive (`C:`) and its file count is the items in it.
+    RecycleBin,
     /// One cleanup's files in quarantine (only in the quarantine tree).
     Batch,
 }
@@ -50,6 +53,10 @@ pub struct NodeView {
     /// Whether "Select recommended" may pick the rule (see `Rule`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended: Option<bool>,
+    /// The built-in action of the rule, such as `recycle-bin`. A category
+    /// has one when all its rules share it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
     /// Something inside needs administrator rights to clean.
     pub needs_admin: bool,
     pub size_on_disk: u64,
@@ -341,6 +348,10 @@ impl ScanResults {
             rule_id: rule.map(|rule| rule.rule_id.clone()),
             risk: rule.map(|rule| rule.risk),
             recommended: rule.map(|rule| rule.recommended),
+            builtin: match rule {
+                Some(rule) => rule.builtin.clone(),
+                None => self.shared_builtin(node),
+            },
             needs_admin: node.needs_admin,
             size_on_disk: node.size_on_disk,
             file_count: node.file_count,
@@ -358,6 +369,18 @@ impl ScanResults {
             has_children: !node.children.is_empty(),
             children: None,
         }
+    }
+
+    /// The builtin all of a category's rules share, if they do.
+    fn shared_builtin(&self, category: &Node) -> Option<String> {
+        let mut builtins = category.children.iter().map(|&child| {
+            let rule = self.nodes[child as usize].rule?;
+            self.report.rules[rule].builtin.as_deref()
+        });
+        let first = builtins.next()??;
+        builtins
+            .all(|other| other == Some(first))
+            .then(|| first.to_owned())
     }
 
     /// Adds every visible node's numbers into its parent. Children always
@@ -514,6 +537,17 @@ fn build(report: &ScanReport, nodes: &mut Vec<Node>) -> Vec<NodeId> {
         let mut folder_ids: HashMap<(NodeId, OsString), NodeId> = HashMap::new();
         for &index in findings {
             let finding = &report.findings[index];
+            if let Target::RecycleBin { drive, .. } = finding.target {
+                let mut bin = Node::new(NodeKind::RecycleBin, format!("{drive}:"), Some(rule_id));
+                bin.rule = Some(rule_index);
+                bin.path = Some(finding.path.clone());
+                bin.finding = Some(index);
+                bin.size_on_disk = finding.size_on_disk;
+                bin.file_count = finding.file_count;
+                bin.needs_admin = finding.needs_admin;
+                push(nodes, bin);
+                continue;
+            }
             let mut parent = location_ids
                 .get(finding.root.as_path())
                 .copied()
@@ -588,6 +622,7 @@ mod tests {
             risk,
             recommended: true,
             needs_admin,
+            builtin: None,
             app: None,
             status: RuleStatus::Scanned,
             roots: Vec::new(),
@@ -627,14 +662,14 @@ mod tests {
                     last_modified: 1_000 + index as u64,
                     needs_admin: rule.needs_admin,
                     evidence: vec![format!("evidence for {relative}")],
-                    snapshot: FileSnapshot {
+                    target: Target::File(FileSnapshot {
                         path,
                         len: size,
                         allocated: size,
                         links: 1,
                         modified: UNIX_EPOCH,
                         file_id: Default::default(),
-                    },
+                    }),
                 }
             })
             .collect();

@@ -1,4 +1,13 @@
-import { AppWindow, Archive, Clock, ShieldAlert, Trash, type LucideIcon } from 'lucide-react'
+import {
+  AppWindow,
+  Archive,
+  Clock,
+  ShieldAlert,
+  Trash,
+  Trash2,
+  TrashOff,
+  type LucideIcon,
+} from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -16,7 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { plannedFiles, type CleanPlan } from '@/lib/clean'
+import { binItems, plansAnything, type BinTally, type CleanPlan } from '@/lib/clean'
 import { formatAge, formatBytes, formatDay } from '@/lib/format'
 import type { Tally } from '@/lib/selection'
 import { cn } from '@/lib/utils'
@@ -55,12 +64,29 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
   const locale = i18n.language
   const [understood, setUnderstood] = useState(false)
   const [now] = useState(() => Date.now() / 1000)
-  const deleting = plan.delete.files > 0
+  const deletingFiles = plan.delete.files > 0
+  const emptying = plan.recycle_bins.length > 0
+  const deleting = deletingFiles || emptying
   const quarantining = plan.quarantine.length > 0
-  const ready = plannedFiles(plan) > 0 && (!deleting || understood)
+  const ready = plansAnything(plan) && (!deleting || understood)
   const confirm = deleting && quarantining ? 'confirmBoth' : deleting ? 'confirmDelete' : 'confirmQuarantine'
   const tally = ({ files, size }: Tally) =>
     t('clean.files', { count: files, size: formatBytes(size, locale) })
+  const bin = ({ drive, items, size }: BinTally) =>
+    `${t('results.binDrive', { drive: `${drive}:` })} · ${t('clean.items', {
+      count: items,
+      size: formatBytes(size, locale),
+    })}`
+  const items = binItems(plan.recycle_bins)
+  const understand =
+    deletingFiles && emptying
+      ? t('clean.understandBoth', {
+          files: t('clean.fileCount', { count: plan.delete.files }),
+          items: t('clean.itemCount', { count: items }),
+        })
+      : emptying
+        ? t('clean.understandBin', { count: items })
+        : t('clean.understand', { count: plan.delete.files })
 
   return (
     <AlertDialogContent>
@@ -106,7 +132,7 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
       )}
 
       <ul className="space-y-3">
-        {deleting && (
+        {deletingFiles && (
           <Group
             icon={Trash}
             title={t('clean.deleteTitle')}
@@ -115,6 +141,16 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
             iconClass="text-destructive"
           />
         )}
+        {plan.recycle_bins.map((each) => (
+          <Group
+            key={each.drive}
+            icon={Trash2}
+            title={t('clean.binTitle')}
+            detail={bin(each)}
+            hint={t('clean.binHint')}
+            iconClass="text-destructive"
+          />
+        ))}
         {plan.quarantine.map((group) => (
           <Group
             key={group.days}
@@ -136,8 +172,18 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
             iconClass="text-muted-foreground"
           />
         )}
+        {plan.recycle_bins_kept.map((each) => (
+          <Group
+            key={`kept-${each.drive}`}
+            icon={TrashOff}
+            title={t('clean.binKeptTitle')}
+            detail={bin(each)}
+            hint={t('clean.binKeptHint')}
+            iconClass="text-muted-foreground"
+          />
+        ))}
       </ul>
-      {plannedFiles(plan) === 0 && (
+      {!plansAnything(plan) && (
         <p className="text-sm text-muted-foreground">{t('clean.nothingToClean')}</p>
       )}
 
@@ -148,7 +194,7 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
             checked={understood}
             onCheckedChange={(checked) => setUnderstood(checked === true)}
           />
-          {t('clean.understand', { count: plan.delete.files })}
+          {understand}
         </label>
       )}
 

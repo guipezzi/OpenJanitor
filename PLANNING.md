@@ -67,6 +67,7 @@ Commercial cleaners usually lock their most useful features behind a paywall. Op
 | D29 | Quarantine actions | Restore conflicts are asked about once per restore (Replace, Keep both, or Skip, for all of them). Expired files are deleted at startup without asking, and the screen says so. "Delete now" and "Empty quarantine now" need the same tick as D27 ([§7.3](#73-quarantine-screen)) |
 | D30 | History retention | Per-file lines are kept for 90 days; after that, each cleanup keeps only its totals line, forever ([§4.8](#48-audit-log)) |
 | D31 | Settings         | Settings can only make cleaning more careful than the defaults: the minimum age never shortens a rule's own wait, and quarantine retention starts at 7 days (medium) and 30 days (review). A damaged `settings.json` stops scans and cleanups until it's fixed or reset; it never falls back to defaults silently. Changes save as soon as they're made ([§7.4](#74-other-screens)) |
+| D32 | Recycle Bin      | Emptied as a whole per drive through the shell API, like File Explorer, so the minimum age doesn't apply; instead it's never preselected, and its details offer *Open the Recycle Bin*. If its item count or size changed since the scan, it's left alone (D26). With "Always use the quarantine" on, it's left out of the plan, since it can't be quarantined. System drive only until drive selection (D15) ([§6.1](#61-simple-clean-phase-1)) |
 
 ## 4. Safety model
 
@@ -277,7 +278,14 @@ struct Finding {
 ### 6.1 Simple clean (phase 1)
 
 - User and system temp folders
-- Recycle Bin (through the shell API)
+- Recycle Bin, emptied through the shell API (D32):
+  - One item per drive in the results (the system drive for now; other drives come with drive selection), with the item count and size Windows reports. That size is the deleted files' own size, a small exception to "size on disk".
+  - Emptied as a whole, like File Explorer's *Empty Recycle Bin*, so the minimum age doesn't apply. That's why it's low risk but never preselected (`recommended = false`), and its details panel offers *Open the Recycle Bin* instead of *Open in Explorer*, to check or restore something first.
+  - Only the signed-in user's Recycle Bin; other users' aren't touched, and no admin rights are needed.
+  - The confirmation lists it under permanent deletion, with the D27 tick ("…and the 42 items in the Recycle Bin will be permanently deleted"). Right before emptying, `oj-safety` checks the item count and size again; if either changed since the scan, it's left alone, so nothing deleted after the scan goes with it (D26).
+  - With "Always use the quarantine" on, it's left out of the plan and the confirmation says why: its contents can't be quarantined.
+  - `$Recycle.Bin` stays on the deny list: it's never deleted by hand. The shell call lives alone in `oj-windows`, and only `oj-safety` may call it (a CI check enforces both).
+  - The history gets one line per drive, with its item count and size.
 - Browser caches for Chrome, Edge, Firefox, Brave, and Opera (cache only)
 - Thumbnail cache
 - Windows Error Reporting files and crash dumps
@@ -326,7 +334,7 @@ If a browser or app whose cache is selected is still running, the app asks the u
 - Results in a **grouped tree** (Category → Folder → Files), with tri-state checkboxes, sorted by size
 - Each row shows a name, a risk badge (Low / Medium / Review), and a size, plus a shield icon when admin is needed
 - **Nothing is preselected.** A "Select recommended" button selects low-risk items, except rules marked `recommended = false` (D24).
-- **Details panel** on click: why the item was flagged, rule, evidence, last modified, "Open in Explorer"
+- **Details panel** on click: why the item was flagged, rule, evidence, last modified, "Open in Explorer" ("Open the Recycle Bin" for the Recycle Bin)
 - Footer: selected count and total size, with **Protect** and **Clean** actions. The Clean label reflects the policy (delete or quarantine).
 - Scan progress with a cancel button
 
@@ -515,13 +523,13 @@ Small PRs in four blocks. Each one leaves the app working. The Clean button only
    - **7a. Quarantine screen** ([§7.3](#73-quarantine-screen)): restore with conflict choices, delete now, empty, and deleting expired files at startup, all written to the history.
    - **7b. History screen** ([§7.4](#74-other-screens)): cleanups with their totals and files, the total space freed, and trimming old per-file lines (D30).
 8. **Settings** ([§7.4](#74-other-screens)). Minimum age, quarantine policy and retention, "Always use the quarantine", and theme (system, light, dark), with D31's limits.
-9. **Recycle Bin** through the shell API.
+9. **Recycle Bin** through the shell API (D32): a builtin rule (`recycle-bin`), one result per drive, emptied as a whole after the same revalidation as files.
 
 **D. Real Windows, then ship**
 
 10. **Drives and charts.** Drive selector ([§7.9](#79-drive-selection)), the segmented drive bar, and the donut of cleanable space ([§7.8](#78-disk-usage-visualization)).
 11. **Elevated helper v1** ([§4.6](#46-privilege-model)) for admin-only items such as Windows temp files, with one UAC prompt per cleanup.
-12. **Installer and release.** Per-machine NSIS installer, a GitHub Actions workflow that builds it for each version tag, and an end-to-end test in Windows Sandbox as a first-time user. Then the pt-BR translation and v0.1.0.
+12. **Installer and release.** Per-machine NSIS installer, a GitHub Actions workflow that builds it for each version tag, and an end-to-end test in Windows Sandbox as a first-time user, including a real (not dry-run) cleanup that empties the Recycle Bin. Then the pt-BR translation and v0.1.0.
 
 ### Phase 2 — Advanced clean
 

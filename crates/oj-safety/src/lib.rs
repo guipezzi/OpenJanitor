@@ -10,6 +10,7 @@
 //! - [`exec`]: revalidation and the actual delete, with dry-run mode.
 //! - [`quarantine`]: moving files aside so they can be restored, and
 //!   deleting them for good later.
+//! - [`recycle_bin`]: reading and emptying the Recycle Bin, never by hand.
 //! - [`hash`]: content fingerprints, only when a feature asks for one.
 //! - [`protected`]: the user's Protected list.
 //! - [`persist`]: crash-safe saving of OpenJanitor's own files.
@@ -24,6 +25,7 @@ pub mod path;
 pub mod persist;
 pub mod protected;
 pub mod quarantine;
+pub mod recycle_bin;
 pub mod snapshot;
 pub mod system;
 pub mod walk;
@@ -34,6 +36,7 @@ pub use exec::{Executor, Mode, Outcome, SkipReason};
 pub use path::{NormPath, PathError};
 pub use protected::{Entry, EntryKind, ProtectedError, ProtectedList};
 pub use quarantine::{Batch, IfExists, Item, ItemState, Manifest, ManifestError, Store};
+pub use recycle_bin::{BinContents, EmptyPermit, FakeRecycleBin, RecycleBin, WindowsRecycleBin};
 pub use snapshot::FileSnapshot;
 pub use system::{DiscoverError, SystemPaths};
 pub use walk::{CancelToken, WalkStats, walk_files};

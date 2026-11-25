@@ -4,7 +4,8 @@
 //!
 //! Each line has a `type`:
 //!
-//! - `file`: one file a cleanup acted on, or tried to, with the result.
+//! - `file`: one file a cleanup acted on, or tried to, with the result. A
+//!   Recycle Bin gets one too, with its folder as `path` and its `items`.
 //! - `folder`: a folder removed because the cleanup left it empty.
 //! - `cleanup`: the totals, written last.
 //! - `quarantine`: a quarantined file restored (`restore`), deleted for
@@ -32,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::clean::{Action, CleanReport};
 use crate::quarantine::QuarantineReport;
-use crate::scan::Finding;
+use crate::scan::{Finding, Target};
 
 /// The line format written by this version, in each line's `v`.
 pub const FORMAT_VERSION: u32 = 1;
@@ -55,6 +56,9 @@ enum Line<'a> {
         rule_id: &'a str,
         path: &'a Path,
         size: u64,
+        /// For a Recycle Bin: the items in it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        items: Option<u64>,
         action: Action,
         #[serde(flatten)]
         outcome: &'a Outcome,
@@ -153,6 +157,10 @@ impl History {
             rule_id: &finding.rule_id,
             path: &finding.path,
             size: finding.size_on_disk,
+            items: match &finding.target {
+                Target::RecycleBin { contents, .. } => Some(contents.items),
+                Target::File(_) => None,
+            },
             action,
             outcome,
         });

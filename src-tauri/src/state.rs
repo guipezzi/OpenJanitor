@@ -440,6 +440,11 @@ impl AppState {
                 ),
                 NodeKind::Location | NodeKind::Folder => (EntryKind::Folder, path()?, None),
                 NodeKind::File => (EntryKind::File, path()?, None),
+                NodeKind::RecycleBin => {
+                    return Err(
+                        "The Recycle Bin is cleaned as a whole. Protect its rule instead.".into(),
+                    );
+                }
                 NodeKind::Batch => return Err(no_item(node)),
             };
             Ok(Entry {

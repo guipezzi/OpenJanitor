@@ -65,11 +65,14 @@ pub struct HistoryEntry {
     pub details: u64,
 }
 
-/// What happened to one file (or folder) in an entry.
+/// What happened to one file (or folder, or Recycle Bin) in an entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HistoryFile {
     pub path: String,
     pub size: u64,
+    /// For a Recycle Bin: the items in it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<u64>,
     /// `deleted`, `would_delete`, `quarantined`, `would_quarantine`,
     /// `restored`, `would_restore`, `skipped`, `replaced` (moved aside by a
     /// restore), or `folder_removed`.
@@ -128,6 +131,8 @@ struct FileLine {
     path: String,
     #[serde(default)]
     size: u64,
+    #[serde(default)]
+    items: Option<u64>,
     result: String,
     #[serde(default)]
     freed: u64,
@@ -150,9 +155,17 @@ struct CleanupLine {
     #[serde(default)]
     deleted: Tally,
     #[serde(default)]
+    recycle_bins: Vec<BinLine>,
+    #[serde(default)]
     quarantined: Vec<Tally>,
     #[serde(default)]
     skipped: Vec<SkipLine>,
+}
+
+#[derive(Deserialize)]
+struct BinLine {
+    items: u64,
+    size: u64,
 }
 
 #[derive(Deserialize)]
@@ -235,10 +248,12 @@ impl HistoryView {
                     let counted = group
                         .counted
                         .get_or_insert_with(|| blank(EntryKind::Cleanup, line.cleanup, line.mode));
-                    count(counted, &line.result, line.freed, line.size);
+                    let files = line.items.unwrap_or(1);
+                    count(counted, &line.result, line.freed, line.size, files);
                     group.files.push(HistoryFile {
                         path: line.path,
                         size: line.size,
+                        items: line.items,
                         reason: line.reason.map(|r| r.kind),
                         result: line.result,
                     });
@@ -251,6 +266,7 @@ impl HistoryView {
                         .push(HistoryFile {
                             path: line.path,
                             size: 0,
+                            items: None,
                             result: "folder_removed".into(),
                             reason: None,
                         });
@@ -275,11 +291,12 @@ impl HistoryView {
                         let counted = group
                             .counted
                             .get_or_insert_with(|| blank(kind_of(line.action), id, line.mode));
-                        count(counted, &line.result, line.freed, line.size);
+                        count(counted, &line.result, line.freed, line.size, 1);
                     }
                     group.files.push(HistoryFile {
                         path: line.path,
                         size: line.size,
+                        items: None,
                         reason: line.reason.map(|r| r.kind),
                         result: if replaced {
                             "replaced".into()
@@ -405,18 +422,27 @@ fn cleanup_entry(line: &CleanupLine) -> HistoryEntry {
         entry.quarantined.files += group.files;
         entry.quarantined.size += group.size;
     }
-    entry.files = line.deleted.files + entry.quarantined.files;
-    entry.freed = line.deleted.size;
+    // A Recycle Bin's items count as its files.
+    let bins: Tally = line
+        .recycle_bins
+        .iter()
+        .fold(Tally::default(), |sum, bin| Tally {
+            files: sum.files + bin.items,
+            size: sum.size + bin.size,
+        });
+    entry.files = line.deleted.files + bins.files + entry.quarantined.files;
+    entry.freed = line.deleted.size + bins.size;
     entry.skipped = line.skipped.iter().map(|s| s.files).sum();
     entry.cancelled = line.cancelled;
     entry
 }
 
 /// Adds one file line's result to numbers counted without a totals line.
-fn count(entry: &mut HistoryEntry, result: &str, freed: u64, size: u64) {
+/// `files` is 1, or a Recycle Bin's items.
+fn count(entry: &mut HistoryEntry, result: &str, freed: u64, size: u64, files: u64) {
     match result {
         "deleted" | "would_delete" => {
-            entry.files += 1;
+            entry.files += files;
             entry.freed += freed;
         }
         "quarantined" | "would_quarantine" => {

@@ -10,7 +10,13 @@ import { planClean, type CleanPlan } from '@/lib/clean'
 import { formatBytes } from '@/lib/format'
 import { useNodeLabel } from '@/lib/labels'
 import { protectItem } from '@/lib/protected'
-import { couldNotRead, revealInExplorer, type NodeView, type ScanOverview } from '@/lib/scan'
+import {
+  couldNotRead,
+  openRecycleBin,
+  revealInExplorer,
+  type NodeView,
+  type ScanOverview,
+} from '@/lib/scan'
 import { recommended, tallyAll, toggle } from '@/lib/selection'
 import { useResultsTree } from '@/lib/use-results-tree'
 
@@ -139,6 +145,7 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
           node={focused}
           rule={focused?.rule_id ? rules.get(focused.rule_id) : undefined}
           onReveal={(node) => revealInExplorer(overview.scan_id, node.id)}
+          onOpenRecycleBin={openRecycleBin}
           onProtect={(node) => void protect(node)}
         />
       </div>

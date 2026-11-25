@@ -5,13 +5,15 @@ import {
   CircleStop,
   FolderMinus,
   ShieldAlert,
+  Trash2,
+  TrashOff,
   TriangleAlert,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { TestModeNote } from '@/components/test-mode-note'
-import type { CleanReport } from '@/lib/clean'
+import { freedBy, type CleanReport } from '@/lib/clean'
 import { formatBytes, formatDay } from '@/lib/format'
 
 /** What a cleanup did (PLANNING.md section 7.1). */
@@ -25,6 +27,9 @@ export function CleanSummary({ report }: { report: CleanReport }) {
       ? t('clean.stoppedTitle')
       : t('clean.doneTitle')
   const skipped = report.skipped.reduce((sum, count) => sum + count.files, 0)
+  const size = (bytes: number) => formatBytes(bytes, locale)
+  // Only the Recycle Bin was emptied: its own line says so.
+  const filesLine = report.deleted.files > 0 || report.recycle_bins.length === 0
   const inUse = report.skipped.some((count) => count.reason === 'in_use')
 
   return (
@@ -34,22 +39,46 @@ export function CleanSummary({ report }: { report: CleanReport }) {
         <div>
           <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
           <p className="text-3xl font-semibold tabular-nums">
-            {formatBytes(report.deleted.size, locale)}{' '}
+            {formatBytes(freedBy(report), locale)}{' '}
             <span className="text-base font-normal text-muted-foreground">
               {dryRun ? t('clean.wouldFree') : t('clean.freedNow')}
             </span>
           </p>
-          <p className="text-sm text-muted-foreground">
-            {dryRun
-              ? t('clean.wouldDeleteFiles', { count: report.deleted.files })
-              : t('clean.deletedFiles', { count: report.deleted.files })}
-          </p>
+          {filesLine && (
+            <p className="text-sm text-muted-foreground">
+              {dryRun
+                ? t('clean.wouldDeleteFiles', { count: report.deleted.files })
+                : t('clean.deletedFiles', { count: report.deleted.files })}
+            </p>
+          )}
         </div>
       </div>
 
       {dryRun && <TestModeNote>{t('clean.testDoneNote')}</TestModeNote>}
 
       <ul className="space-y-2 text-sm">
+        {report.recycle_bins.map((bin) => (
+          <Line key={bin.drive} icon={<Trash2 className="text-primary" />}>
+            {t(dryRun ? 'clean.binWouldEmpty' : 'clean.binEmptied', {
+              drive: `${bin.drive}:`,
+              count: bin.items,
+              size: size(bin.size),
+            })}
+          </Line>
+        ))}
+        {report.recycle_bins_skipped.map((bin) => (
+          <Line key={`skipped-${bin.drive}`} icon={<TriangleAlert className="text-amber-600 dark:text-amber-400" />}>
+            {t('clean.binSkipped', {
+              drive: `${bin.drive}:`,
+              reason: t(`clean.reason.${bin.reason}`),
+            })}
+          </Line>
+        ))}
+        {report.recycle_bins_kept.map((bin) => (
+          <Line key={`kept-${bin.drive}`} icon={<TrashOff className="text-muted-foreground" />}>
+            {t('clean.binKeptLine', { drive: `${bin.drive}:` })}
+          </Line>
+        ))}
         {report.quarantined.map((group) => (
           <Line key={group.days} icon={<Archive className="text-primary" />}>
             {t('clean.quarantined', {

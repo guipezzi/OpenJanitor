@@ -1,16 +1,17 @@
-//! Running rules against the filesystem. Read-only.
+//! Running rules against the filesystem and the Recycle Bin. Read-only.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_safety::{
-    CancelToken, DenyList, FileSnapshot, NormPath, ProtectedList, WalkStats, walk_files,
+    BinContents, CancelToken, DenyList, FileSnapshot, NormPath, ProtectedList, RecycleBin,
+    WalkStats, walk_files,
 };
 use serde::Serialize;
 
 use crate::age::{DEFAULT_MIN_AGE, describe};
-use crate::rule::{App, CompiledRule, Level, Risk, RuleSet};
+use crate::rule::{App, CompiledRule, Level, RECYCLE_BIN, Risk, RuleSet};
 use crate::vars::{Vars, expand};
 
 /// How to run a scan.
@@ -38,27 +39,41 @@ impl ScanOptions {
     }
 }
 
-/// One file a rule suggests cleaning.
+/// What a finding is, and what it looked like at scan time, for
+/// revalidation.
+#[derive(Debug, Clone)]
+pub enum Target {
+    File(FileSnapshot),
+    /// A drive's whole Recycle Bin, emptied through the Windows shell.
+    RecycleBin {
+        drive: char,
+        contents: BinContents,
+    },
+}
+
+/// One file a rule suggests cleaning, or one drive's Recycle Bin.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub id: u64,
     pub rule_id: String,
     pub category: String,
     pub risk: Risk,
+    /// For a Recycle Bin, its folder (`C:\$Recycle.Bin`), for display only.
     pub path: PathBuf,
     /// The rule location the file was found under.
     pub root: PathBuf,
-    /// Bytes freed by deleting it (0 for files with other hard links).
+    /// Bytes freed by deleting it (0 for files with other hard links). For
+    /// a Recycle Bin, the size Windows reports.
     pub size_on_disk: u64,
+    /// 1 for a file; for a Recycle Bin, the items in it.
     pub file_count: u64,
-    /// Seconds since the Unix epoch.
+    /// Seconds since the Unix epoch. 0 for a Recycle Bin.
     pub last_modified: u64,
     pub needs_admin: bool,
     /// Human-readable reasons, shown in the details panel.
     pub evidence: Vec<String>,
-    /// What the file looked like at scan time, for revalidation.
     #[serde(skip)]
-    pub snapshot: FileSnapshot,
+    pub target: Target,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -87,6 +102,9 @@ pub struct RuleReport {
     /// risk).
     pub recommended: bool,
     pub needs_admin: bool,
+    /// The built-in action it runs, such as `recycle-bin`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
     /// The program whose files these are. While it runs, they're left out
     /// of cleanups.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,6 +161,8 @@ pub struct Scanner<'a> {
     pub deny: &'a DenyList,
     /// The user's Protected list: protected rules and files are left out.
     pub protected: &'a ProtectedList,
+    /// Read for the Recycle Bin rule; never emptied here.
+    pub recycle_bin: &'a dyn RecycleBin,
 }
 
 impl Scanner<'_> {
@@ -212,6 +232,7 @@ impl Scanner<'_> {
             risk: rule.risk,
             recommended: rule.recommended,
             needs_admin: rule.needs_admin,
+            builtin: rule.builtin.clone(),
             app: rule.app.clone(),
             status: RuleStatus::Scanned,
             roots: Vec::new(),
@@ -226,6 +247,16 @@ impl Scanner<'_> {
 
         if self.protected.protects_rule(&rule.id) {
             report.status = RuleStatus::Protected;
+            return report;
+        }
+        if let Some(builtin) = &rule.builtin {
+            match builtin.as_str() {
+                RECYCLE_BIN => self.scan_recycle_bin(compiled, &mut report, state),
+                // Rules can only name known builtins.
+                other => report
+                    .warnings
+                    .push(format!("unknown builtin action {other:?}")),
+            }
             return report;
         }
         if let Some(detect) = &rule.detect {
@@ -302,6 +333,74 @@ impl Scanner<'_> {
         }
         report
     }
+
+    /// The signed-in user's Recycle Bin on the system drive, as one finding
+    /// if it holds anything. Other drives come with drive selection (D15).
+    /// The minimum age doesn't apply: it's emptied as a whole (D32).
+    fn scan_recycle_bin(
+        &self,
+        compiled: &CompiledRule,
+        report: &mut RuleReport,
+        state: &mut State,
+    ) {
+        let Some(drive) = self
+            .vars
+            .get("SYSTEMDRIVE")
+            .as_deref()
+            .and_then(drive_letter)
+        else {
+            report.status = RuleStatus::NoLocations;
+            report
+                .warnings
+                .push("%SYSTEMDRIVE% isn't a drive on this machine".into());
+            return;
+        };
+        let folder = PathBuf::from(format!("{drive}:\\$Recycle.Bin"));
+        report.roots.push(folder.clone());
+        let contents = match self.recycle_bin.contents(drive) {
+            Ok(contents) if contents.items > 0 => contents,
+            Ok(_) => return,
+            Err(error) => {
+                report.warnings.push(format!(
+                    "Couldn't read the Recycle Bin on {drive}: ({error})"
+                ));
+                return;
+            }
+        };
+        let rule = &compiled.rule;
+        let finding = Finding {
+            id: state.findings.len() as u64 + 1,
+            rule_id: rule.id.clone(),
+            category: rule.category.clone(),
+            risk: rule.risk,
+            path: folder.clone(),
+            root: folder,
+            size_on_disk: contents.size,
+            file_count: contents.items,
+            last_modified: 0,
+            needs_admin: rule.needs_admin,
+            evidence: vec![
+                format!(
+                    "Windows counts {} items in the Recycle Bin on drive {drive}:",
+                    contents.items
+                ),
+                "Its size is the one Windows reports for the deleted files, which can differ a little from the space they take on disk".into(),
+            ],
+            target: Target::RecycleBin { drive, contents },
+        };
+        report.findings += 1;
+        report.size_on_disk += finding.size_on_disk;
+        state.size_on_disk += finding.size_on_disk;
+        state.findings.push(finding);
+    }
+}
+
+/// The drive a path is on: `C:` (or `C:\…`) → `'C'`. `None` for anything
+/// else, such as a network path.
+fn drive_letter(path: &Path) -> Option<char> {
+    let mut chars = path.to_str()?.chars();
+    let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+    (chars.next() == Some(':')).then(|| letter.to_ascii_uppercase())
 }
 
 struct State {
@@ -367,7 +466,7 @@ fn make_finding(
             .unwrap_or(0),
         needs_admin: rule.needs_admin,
         evidence,
-        snapshot,
+        target: Target::File(snapshot),
     }
 }
 

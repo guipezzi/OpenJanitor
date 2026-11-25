@@ -19,8 +19,8 @@ pub mod settings;
 pub mod vars;
 
 pub use clean::{
-    Action, CleanProgress, CleanReport, Cleaner, OpenApp, Plan, PlanSummary, Policy,
-    QuarantineGroup, QuarantinedGroup, SkipCount, Tally,
+    Action, BinSkip, BinTally, CleanProgress, CleanReport, Cleaner, OpenApp, Plan, PlanSummary,
+    Policy, QuarantineGroup, QuarantinedGroup, SkipCount, Tally,
 };
 pub use history::{History, QuarantineAction};
 pub use history_view::{
@@ -33,8 +33,10 @@ pub use quarantine::{
     QuarantineView, UnreadableBatch, restore_conflicts,
 };
 pub use results::{ChildPage, NodeId, NodeKind, NodeView, ScanResults};
-pub use rule::{App, CompiledRule, Level, Risk, Rule, RuleError, RuleSet};
+pub use rule::{App, CompiledRule, Level, RECYCLE_BIN, Risk, Rule, RuleError, RuleSet};
 pub use running::RunningPrograms;
-pub use scan::{Finding, RuleReport, RuleStatus, ScanOptions, ScanProgress, ScanReport, Scanner};
+pub use scan::{
+    Finding, RuleReport, RuleStatus, ScanOptions, ScanProgress, ScanReport, Scanner, Target,
+};
 pub use settings::{Settings, SettingsChoices, SettingsError, Theme};
 pub use vars::{EnvVars, Vars};
