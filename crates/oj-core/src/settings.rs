@@ -7,6 +7,9 @@
 //! holds a value outside the choices, is an error. Callers must refuse to
 //! scan or clean rather than fall back to defaults, which could be less
 //! careful than what the user chose.
+//!
+//! Format 2 added the drives to scan (D33). A format 1 file still reads:
+//! its drives are the default, the system drive.
 
 use std::fs;
 use std::io;
@@ -18,9 +21,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::clean::{Action, Policy};
+use crate::drives::is_volume_id;
 
 /// The `settings.json` format written by this version.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
+
+/// More remembered drives than this can't come from someone picking them.
+const MAX_DRIVES: usize = 64;
 
 /// The minimum ages offered, in days. 1 day is the shortest any rule uses.
 pub const MIN_AGE_DAYS: [u32; 4] = [1, 3, 7, 30];
@@ -42,7 +49,7 @@ pub enum Theme {
 }
 
 /// What the user chose. Every field is required in the file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     /// Files changed more recently than this are left out of scans,
@@ -56,6 +63,10 @@ pub struct Settings {
     /// One of [`REVIEW_DAYS`].
     pub review_days: u32,
     pub theme: Theme,
+    /// The drives to scan, by volume ID (`\\?\Volume{…}\`). Empty means
+    /// the system drive. Drives that aren't connected stay on the list, so
+    /// they're selected again when they come back.
+    pub drives: Vec<String>,
 }
 
 impl Default for Settings {
@@ -66,6 +77,7 @@ impl Default for Settings {
             medium_days: MEDIUM_DAYS[0],
             review_days: REVIEW_DAYS[0],
             theme: Theme::System,
+            drives: Vec::new(),
         }
     }
 }
@@ -124,6 +136,17 @@ impl Settings {
         if version > u64::from(FORMAT_VERSION) {
             return Err(SettingsError::NewerVersion(version));
         }
+        if version < 2 {
+            // Format 1 had no drives: the default, the system drive.
+            if fields
+                .insert("drives".into(), Value::Array(Vec::new()))
+                .is_some()
+            {
+                return Err(SettingsError::Invalid(
+                    "format 1 settings can't list drives".into(),
+                ));
+            }
+        }
         let settings: Self = serde_json::from_value(Value::Object(fields))?;
         settings.validate()?;
         Ok(settings)
@@ -147,7 +170,22 @@ impl Settings {
     pub fn validate(&self) -> Result<(), SettingsError> {
         check("minimum age", self.min_age_days, &MIN_AGE_DAYS)?;
         check("medium-risk retention", self.medium_days, &MEDIUM_DAYS)?;
-        check("review retention", self.review_days, &REVIEW_DAYS)
+        check("review retention", self.review_days, &REVIEW_DAYS)?;
+        if self.drives.len() > MAX_DRIVES {
+            return Err(SettingsError::Invalid("too many drives are listed".into()));
+        }
+        for (index, id) in self.drives.iter().enumerate() {
+            if !is_volume_id(id) {
+                return Err(SettingsError::Invalid(format!("{id:?} isn't a volume ID")));
+            }
+            if self.drives[..index]
+                .iter()
+                .any(|other| other.eq_ignore_ascii_case(id))
+            {
+                return Err(SettingsError::Invalid(format!("{id} is listed twice")));
+            }
+        }
+        Ok(())
     }
 
     /// The floor on every rule's minimum age.
@@ -224,12 +262,13 @@ mod tests {
             medium_days: 30,
             review_days: 60,
             theme: Theme::Dark,
+            drives: vec![DRIVE.into()],
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
 
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"version\": 1"), "{text}");
+        assert!(text.contains("\"version\": 2"), "{text}");
         assert!(text.contains("\"theme\": \"dark\""), "{text}");
     }
 
@@ -249,9 +288,12 @@ mod tests {
         assert!(!path.exists());
     }
 
+    const DRIVE: &str = r"\\?\Volume{d88dd716-bfa6-48d0-997b-aadbcb888cb8}\";
+
     #[test]
     fn a_damaged_file_is_an_error_never_the_defaults() {
         let valid = r#""min_age_days": 3, "always_quarantine": true, "medium_days": 7, "review_days": 30, "theme": "light""#;
+        let drives = |list: &str| format!(r#""drives": [{list}]"#);
         let damaged = [
             String::new(),
             "not json".to_string(),
@@ -264,6 +306,12 @@ mod tests {
             format!(r#"{{"version": 1, {}}}"#, valid.replace("3,", "0,")),
             format!(r#"{{"version": 1, {}}}"#, valid.replace("light", "blue")),
             format!(r#"{{"version": 1, {}}}"#, valid.replace("true", "1")),
+            format!(r#"{{"version": 1, {valid}, {}}}"#, drives("")),
+            format!(r#"{{"version": 2, {valid}, {}}}"#, drives(r#""C:""#)),
+            format!(
+                r#"{{"version": 2, {valid}, {}}}"#,
+                drives(&format!("{0:?}, {0:?}", DRIVE))
+            ),
         ];
         for text in damaged {
             assert!(Settings::from_json(text.as_bytes()).is_err(), "{text}");
@@ -273,6 +321,16 @@ mod tests {
         assert_eq!(ok.min_age_days, 3);
         assert!(ok.always_quarantine);
         assert_eq!(ok.theme, Theme::Light);
+        assert!(ok.drives.is_empty(), "format 1 means the system drive");
+
+        let text = format!(
+            r#"{{"version": 2, {valid}, {}}}"#,
+            drives(&format!("{DRIVE:?}"))
+        );
+        assert_eq!(
+            Settings::from_json(text.as_bytes()).unwrap().drives,
+            [DRIVE]
+        );
     }
 
     #[test]

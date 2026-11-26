@@ -96,7 +96,8 @@ export function SettingsScreen({ active }: SettingsScreenProps) {
     settings !== null &&
     overview !== null &&
     (Object.keys(overview.defaults) as (keyof Settings)[]).every(
-      (key) => settings[key] === overview.defaults[key],
+      // The drives are a list, so compare their contents.
+      (key) => JSON.stringify(settings[key]) === JSON.stringify(overview.defaults[key]),
     )
 
   return (

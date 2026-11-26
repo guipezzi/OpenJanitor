@@ -667,3 +667,96 @@ fn recycle_bin_finds_nothing_when_empty_or_protected() {
     let report = found(&m, &protected);
     assert_eq!((report.status, report.findings), (RuleStatus::Protected, 0));
 }
+
+// ----- Drive selection (D33) -----
+
+/// The drive the fake machine is on, and one it isn't.
+fn here_and_elsewhere(m: &FakeMachine) -> (char, char) {
+    let here = m
+        .root
+        .to_str()
+        .unwrap()
+        .chars()
+        .next()
+        .unwrap()
+        .to_ascii_uppercase();
+    (here, if here == 'Q' { 'R' } else { 'Q' })
+}
+
+#[test]
+fn locations_on_drives_that_arent_selected_are_left_alone() {
+    let m = FakeMachine::new();
+    let (here, elsewhere) = here_and_elsewhere(&m);
+    old_file(&m.system.local_app_data.join(r"Temp\old.tmp"));
+    m.bin.set(here, 2, 200);
+    m.bin.set(elsewhere, 5, 500);
+
+    let mut options = oj_core::ScanOptions::new(oj_core::Level::Simple);
+    options.drives = Some(vec![elsewhere]);
+    let report = m.scan_options(&bundled(), &options);
+
+    let temp = report
+        .rules
+        .iter()
+        .find(|r| r.rule_id == "windows.temp.user")
+        .unwrap();
+    assert_eq!(temp.status, RuleStatus::NotSelected);
+    assert!(
+        temp.warnings[0].contains("isn't selected"),
+        "{:?}",
+        temp.warnings
+    );
+    let bins: Vec<(char, u64)> = report
+        .findings
+        .iter()
+        .filter_map(|f| match f.target {
+            Target::RecycleBin { drive, contents } => Some((drive, contents.items)),
+            Target::File(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        bins,
+        [(elsewhere, 5)],
+        "only the selected drive's Recycle Bin"
+    );
+    assert_eq!(report.drives, Some(vec![elsewhere]));
+}
+
+#[test]
+fn every_selected_drive_gets_its_recycle_bin_read() {
+    let m = FakeMachine::new();
+    let (here, elsewhere) = here_and_elsewhere(&m);
+    old_file(&m.system.local_app_data.join(r"Temp\old.tmp"));
+    m.bin.set(here, 2, 200);
+    m.bin.set(elsewhere, 5, 500);
+
+    let mut options = oj_core::ScanOptions::new(oj_core::Level::Simple);
+    options.drives = Some(vec![here, elsewhere]);
+    let results = ScanResults::new(m.scan_options(&bundled(), &options));
+
+    let report = results.report();
+    let temp = report
+        .rules
+        .iter()
+        .find(|r| r.rule_id == "windows.temp.user")
+        .unwrap();
+    assert_eq!((temp.status, temp.findings), (RuleStatus::Scanned, 1));
+    let category = results
+        .categories()
+        .into_iter()
+        .find(|c| c.name == "recycle-bin")
+        .unwrap();
+    assert_eq!((category.file_count, category.size_on_disk), (7, 700));
+    let rule = &category.children.as_ref().unwrap()[0];
+    let mut drives: Vec<String> = results
+        .children(rule.id, 0, 10)
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|n| n.name)
+        .collect();
+    drives.sort();
+    let mut expected = vec![format!("{here}:"), format!("{elsewhere}:")];
+    expected.sort();
+    assert_eq!(drives, expected);
+}

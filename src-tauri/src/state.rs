@@ -95,6 +95,18 @@ pub struct ExpiredNote {
     pub report: QuarantineReport,
 }
 
+/// What a cleanup plan depends on besides the selection.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanInputs<'a> {
+    /// The drives selected now: results scanned with others are refused.
+    pub drives: &'a [char],
+    pub policy: &'a Policy,
+    /// Files of apps running now are left out.
+    pub running: &'a RunningPrograms,
+    pub mode: Mode,
+    pub now: SystemTime,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Operation {
     Scan,
@@ -113,6 +125,8 @@ struct Session {
     id: u64,
     results: ScanResults,
     scanned_at: SystemTime,
+    /// The drives the scan covered, if it says.
+    drives: Option<Vec<char>>,
     /// The latest plan made from these results, with its id.
     plan: Option<(u64, Plan)>,
 }
@@ -182,12 +196,14 @@ impl AppState {
             Ok(report) if report.cancelled => Ok(ScanOutcome::Cancelled),
             Ok(report) => {
                 let id = self.last_scan_id.fetch_add(1, Ordering::Relaxed) + 1;
+                let drives = report.drives.clone();
                 let results = ScanResults::new(report);
                 let overview = overview(id, &results);
                 *lock(&self.session) = Some(Session {
                     id,
                     results,
                     scanned_at: SystemTime::now(),
+                    drives,
                     plan: None,
                 });
                 Ok(ScanOutcome::Completed { overview })
@@ -204,16 +220,25 @@ impl AppState {
         &self,
         scan_id: u64,
         choices: &HashMap<NodeId, bool>,
-        policy: &Policy,
-        running: &RunningPrograms,
-        mode: Mode,
-        now: SystemTime,
+        inputs: &PlanInputs,
     ) -> Result<PlanView, String> {
+        let PlanInputs {
+            drives,
+            policy,
+            running,
+            mode,
+            now,
+        } = *inputs;
         let mut session = lock(&self.session);
         let session = session
             .as_mut()
             .filter(|session| session.id == scan_id)
             .ok_or(OUT_OF_DATE)?;
+        if let Some(scanned) = &session.drives
+            && !same_drives(scanned, drives)
+        {
+            return Err("The drives to scan changed since this scan. Scan again.".into());
+        }
         let plan = Plan::build(&session.results, choices, policy, running);
         let plan_id = self.last_plan_id.fetch_add(1, Ordering::Relaxed) + 1;
         let view = PlanView {
@@ -255,6 +280,17 @@ impl AppState {
             cancel: cancel.clone(),
         });
         Ok((results, plan, cancel))
+    }
+
+    /// Forgets the current results, such as when the drives to scan change.
+    /// Refused while a scan or cleanup runs.
+    pub fn forget_results(&self) -> Result<(), String> {
+        let running = lock(&self.running);
+        if let Some(busy) = running.as_ref() {
+            return Err(busy_message(busy.operation));
+        }
+        *lock(&self.session) = None;
+        Ok(())
     }
 
     /// Asks the running cleanup, if any, to stop after the current file.
@@ -490,6 +526,17 @@ impl AppState {
 
 const OUT_OF_DATE: &str = "These results are out of date. Scan again.";
 
+/// The same drive letters, in any order or case.
+fn same_drives(a: &[char], b: &[char]) -> bool {
+    let normalize = |drives: &[char]| {
+        let mut drives: Vec<char> = drives.iter().map(char::to_ascii_uppercase).collect();
+        drives.sort_unstable();
+        drives.dedup();
+        drives
+    };
+    normalize(a) == normalize(b)
+}
+
 fn busy_message(operation: Operation) -> String {
     match operation {
         Operation::Scan => "A scan is already running.",
@@ -521,6 +568,7 @@ mod tests {
             rules: Vec::new(),
             findings: Vec::new(),
             cancelled,
+            drives: None,
         }
     }
 
@@ -595,10 +643,13 @@ mod tests {
         state.plan_clean(
             scan_id,
             &HashMap::new(),
-            &Policy::default(),
-            &RunningPrograms::default(),
-            Mode::DryRun,
-            now,
+            &PlanInputs {
+                drives: &['C'],
+                policy: &Policy::default(),
+                running: &RunningPrograms::default(),
+                mode: Mode::DryRun,
+                now,
+            },
         )
     }
 
@@ -625,6 +676,53 @@ mod tests {
             "a newer plan replaced it"
         );
         assert!(state.begin_clean(second.plan_id).is_ok());
+    }
+
+    #[test]
+    fn a_plan_needs_the_drives_it_was_scanned_with() {
+        let state = AppState::default();
+        state.begin_scan().unwrap();
+        let mut scanned = report(false);
+        scanned.drives = Some(vec!['C', 'D']);
+        let id = completed_id(state.finish_scan(Ok(scanned)));
+        let plan_with = |drives: &[char]| {
+            state.plan_clean(
+                id,
+                &HashMap::new(),
+                &PlanInputs {
+                    drives,
+                    policy: &Policy::default(),
+                    running: &RunningPrograms::default(),
+                    mode: Mode::DryRun,
+                    now: SystemTime::now(),
+                },
+            )
+        };
+
+        let error = plan_with(&['C']).unwrap_err();
+        assert!(error.contains("drives to scan changed"), "{error}");
+        assert!(plan_with(&['d', 'C']).is_ok(), "any order or case");
+    }
+
+    #[test]
+    fn forgetting_results_waits_for_a_running_scan() {
+        let state = AppState::default();
+        state.begin_scan().unwrap();
+        assert!(
+            state
+                .forget_results()
+                .unwrap_err()
+                .contains("scan is already running")
+        );
+        let id = completed_id(state.finish_scan(Ok(report(false))));
+
+        state.forget_results().unwrap();
+        assert!(
+            state
+                .children(id, 0, 0, 10)
+                .unwrap_err()
+                .contains("out of date")
+        );
     }
 
     #[test]

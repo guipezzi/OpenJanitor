@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { AppSidebar, type Screen } from '@/components/app-sidebar'
 import { CleanProgressPanel } from '@/components/clean-progress'
 import { CleanSummary } from '@/components/clean-summary'
+import { DriveSelector } from '@/components/drive-selector'
 import { HistoryScreen } from '@/components/history-screen'
 import { ProtectedScreen } from '@/components/protected-screen'
 import { QuarantineScreen } from '@/components/quarantine-screen'
@@ -50,6 +51,14 @@ export default function App() {
   const [error, setError] = useState<Failure | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const busy = scanning || cleaning !== null
+
+  // The Rust side forgot the results: they no longer match the drives.
+  function drivesChanged() {
+    if (overview || report) setNotice(t('drives.resultsCleared'))
+    setOverview(null)
+    setReport(null)
+    setError(null)
+  }
 
   async function runScan() {
     setError(null)
@@ -159,7 +168,12 @@ export default function App() {
             onScanAgain={() => void runScan()}
           />
         ) : (
-          <p className="pb-6 text-sm text-muted-foreground">{t('scan.nothingFound')}</p>
+          <p className="pb-6 text-sm text-muted-foreground">
+            {/* Not "already tidy" when the Windows drive wasn't even looked at. */}
+            {overview.rules.some((rule) => rule.status === 'not_selected')
+              ? t('scan.nothingFoundOnSelected')
+              : t('scan.nothingFound')}
+          </p>
         )}
       </>
     )
@@ -197,6 +211,10 @@ export default function App() {
                   : t('scan.start')}
             </Button>
           </header>
+
+          {canScan() && (
+            <DriveSelector active={screen === 'clean'} disabled={busy} onChange={drivesChanged} />
+          )}
 
           {error && (
             <Alert variant="destructive">

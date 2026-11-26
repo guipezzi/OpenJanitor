@@ -39,6 +39,18 @@ fn read(path: &std::path::Path) -> Result<Settings, String> {
         .map_err(|e| format!("Your settings ({}) couldn't be read: {e}.", path.display()))
 }
 
+/// The saved settings, or why they can't be read.
+pub fn load() -> Result<Settings, String> {
+    read(&path()?)
+}
+
+/// Checks and saves the settings.
+pub fn save(settings: &Settings) -> Result<(), String> {
+    settings
+        .save(&path()?)
+        .map_err(|e| format!("Couldn't save your settings: {e}"))
+}
+
 /// Loads the settings for a scan or cleanup. `refused` completes "Nothing
 /// was …" when they can't be read.
 pub fn load_for(refused: &str) -> Result<Settings, String> {
@@ -81,7 +93,9 @@ pub fn settings_overview(
     };
     apply_window_theme(
         &app,
-        settings.map_or(Theme::System, |settings| settings.theme),
+        settings
+            .as_ref()
+            .map_or(Theme::System, |settings| settings.theme),
     );
     Ok(SettingsOverview {
         settings,
@@ -99,9 +113,7 @@ pub fn save_settings(
     settings: Settings,
 ) -> Result<Settings, String> {
     let _guard = state.settings_file();
-    settings
-        .save(&path()?)
-        .map_err(|e| format!("Couldn't save your settings: {e}"))?;
+    save(&settings)?;
     apply_window_theme(&app, settings.theme);
     Ok(settings)
 }

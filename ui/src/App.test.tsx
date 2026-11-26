@@ -10,6 +10,7 @@ import {
   type CleanProgress,
   type CleanReport,
 } from './lib/clean'
+import { drivesOverview, selectDrives, type Drive } from './lib/drives'
 import {
   protectedEntries,
   protectItem,
@@ -39,6 +40,12 @@ vi.mock('./lib/protected', () => ({
   importProtected: vi.fn(),
 }))
 
+vi.mock('./lib/drives', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/drives')>()),
+  drivesOverview: vi.fn(),
+  selectDrives: vi.fn(),
+}))
+
 vi.mock('./lib/clean', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/clean')>()),
   planClean: vi.fn(),
@@ -56,6 +63,29 @@ vi.mock('./lib/scan', async (importOriginal) => ({
   revealInExplorer: vi.fn(() => Promise.resolve()),
   openRecycleBin: vi.fn(() => Promise.resolve()),
 }))
+
+const systemDrive: Drive = {
+  letter: 'C',
+  id: '\\\\?\\Volume{d88dd716-bfa6-48d0-997b-aadbcb888cb8}\\',
+  label: 'Windows-SSD',
+  file_system: 'NTFS',
+  total: 509_722_226_688,
+  free: 50_792_275_968,
+  media: 'ssd',
+  connection: 'internal',
+  status: 'ready',
+  system: true,
+  selected: true,
+}
+const externalDrive: Drive = {
+  ...systemDrive,
+  letter: 'D',
+  id: '\\\\?\\Volume{61a9a736-71b3-4fb5-b31f-c1973df5af1f}\\',
+  label: 'SSD Externo',
+  connection: 'external',
+  system: false,
+  selected: false,
+}
 
 function rule(overrides: Partial<RuleReport>): RuleReport {
   return {
@@ -224,6 +254,41 @@ describe('App', () => {
     vi.mocked(planClean).mockReset()
     vi.mocked(runClean).mockReset()
     vi.mocked(cancelClean).mockClear()
+    vi.mocked(drivesOverview).mockResolvedValue({ drives: [systemDrive, externalDrive] })
+    vi.mocked(selectDrives).mockReset()
+  })
+
+  it("doesn't call it tidy when the Windows drive wasn't scanned", async () => {
+    vi.mocked(scan).mockResolvedValue({
+      status: 'completed',
+      overview: {
+        ...overview,
+        findings_total: 0,
+        size_on_disk_total: 0,
+        rules: [rule({ status: 'not_selected' })],
+        categories: [],
+      },
+    })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
+    expect(await screen.findByText(/Nothing to clean on the selected drives/)).toBeInTheDocument()
+    expect(screen.queryByText(/already tidy/)).not.toBeInTheDocument()
+  })
+
+  it('clears the results when the drives to scan change', async () => {
+    await scanned()
+    const drives = screen.getByRole('region', { name: 'Drives to scan' })
+    expect(within(drives).getByText('Windows-SSD (C:)')).toBeInTheDocument()
+
+    vi.mocked(selectDrives).mockResolvedValue({
+      drives: [systemDrive, { ...externalDrive, selected: true }],
+    })
+    fireEvent.click(within(drives).getByRole('checkbox', { name: /SSD Externo \(D:\)/ }))
+
+    expect(await screen.findByText(/The drives to scan changed/)).toBeInTheDocument()
+    expect(selectDrives).toHaveBeenCalledWith([systemDrive.id, externalDrive.id])
+    expect(screen.queryByRole('group', { name: 'Scan results' })).not.toBeInTheDocument()
+    expect(within(drives).getByText(/only empties the Recycle Bin/)).toBeInTheDocument()
   })
 
   it('reviews a cleanup, then runs exactly that plan', async () => {
@@ -576,7 +641,8 @@ describe('App', () => {
       screen.getByText(/Couldn't fully check without administrator rights: System crash dumps\./),
     ).toBeInTheDocument()
     expect(screen.getByText('Nothing selected')).toBeInTheDocument()
-    for (const box of screen.getAllByRole('checkbox')) {
+    const tree = screen.getByRole('group', { name: 'Scan results' })
+    for (const box of within(tree).getAllByRole('checkbox')) {
       expect(box).toHaveAttribute('aria-checked', 'false')
     }
   })

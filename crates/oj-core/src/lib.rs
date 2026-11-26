@@ -8,6 +8,7 @@
 
 pub mod age;
 pub mod clean;
+pub mod drives;
 pub mod history;
 pub mod history_view;
 pub mod quarantine;
@@ -22,6 +23,7 @@ pub use clean::{
     Action, BinSkip, BinTally, CleanProgress, CleanReport, Cleaner, OpenApp, Plan, PlanSummary,
     Policy, QuarantineGroup, QuarantinedGroup, SkipCount, Tally,
 };
+pub use drives::{Connection, Drive, DriveStatus, Media};
 pub use history::{History, QuarantineAction};
 pub use history_view::{
     DETAIL_DAYS, EntryKind, HistoryEntry, HistoryFile, HistoryFilePage, HistoryTotals, HistoryView,
