@@ -133,5 +133,6 @@ fn run_scan(
     };
     let mut options = ScanOptions::new(level);
     options.min_age_floor = Some(settings.min_age());
+    options.drives = Some(crate::drives::selected_letters(&settings)?);
     Ok(scanner.scan_with(&options, cancel, &mut on_progress))
 }

@@ -14,7 +14,7 @@ use oj_safety::{DenyList, Executor, Mode, Store, SystemPaths, WindowsRecycleBin}
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
-use crate::state::{AppState, PlanView};
+use crate::state::{AppState, PlanInputs, PlanView};
 
 /// Progress goes to the UI at most this often.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -39,14 +39,18 @@ pub fn plan_clean(
     }
     let choices: HashMap<NodeId, bool> = choices.into_iter().collect();
     let settings = crate::settings::load_for("cleaned")?;
+    let drives = crate::drives::selected_letters(&settings)?;
     let running = running_programs()?;
     state.plan_clean(
         scan_id,
         &choices,
-        &settings.policy(),
-        &running,
-        Mode::from_env(),
-        SystemTime::now(),
+        &PlanInputs {
+            drives: &drives,
+            policy: &settings.policy(),
+            running: &running,
+            mode: Mode::from_env(),
+            now: SystemTime::now(),
+        },
     )
 }
 

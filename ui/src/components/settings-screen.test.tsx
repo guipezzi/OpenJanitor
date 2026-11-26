@@ -27,6 +27,7 @@ const defaults: Settings = {
   medium_days: 7,
   review_days: 30,
   theme: 'system',
+  drives: [],
 }
 
 function overview(settings: Partial<Settings> | null, error?: string): SettingsOverview {

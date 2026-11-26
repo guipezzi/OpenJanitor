@@ -4,7 +4,8 @@ import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 
 export type Level = 'simple' | 'advanced'
 export type Risk = 'low' | 'medium' | 'review'
-export type RuleStatus = 'scanned' | 'not_detected' | 'no_locations' | 'protected'
+/** `not_selected`: its locations are on drives that aren't selected. */
+export type RuleStatus = 'scanned' | 'not_detected' | 'no_locations' | 'not_selected' | 'protected'
 
 export interface WalkStats {
   files: number

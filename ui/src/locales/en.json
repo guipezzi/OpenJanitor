@@ -206,7 +206,36 @@
     "summary_one": "can be freed from {{count, number}} file",
     "summary_other": "can be freed from {{count, number}} files",
     "nothingDeleted": "Nothing is deleted until you review a cleanup and confirm it.",
-    "nothingFound": "Nothing to clean right now. Everything this scan looks for is already tidy."
+    "nothingFound": "Nothing to clean right now. Everything this scan looks for is already tidy.",
+    "nothingFoundOnSelected": "Nothing to clean on the selected drives. Most temporary files and caches are on the Windows drive, which isn't selected."
+  },
+  "drives": {
+    "title": "Drives to scan",
+    "refresh": "Check the drives again",
+    "name": "{{label}} ({{letter}}:)",
+    "unnamed": "Local disk",
+    "system": "Windows",
+    "lastOne": "At least one drive is always scanned.",
+    "free": "{{free}} free of {{total}}",
+    "media": {
+      "ssd": "SSD",
+      "hdd": "Hard disk",
+      "unknown": "Disk"
+    },
+    "connection": {
+      "internal": "Internal",
+      "external": "External"
+    },
+    "status": {
+      "ready": "Ready",
+      "network": "Network drives aren't supported.",
+      "optical": "CD and DVD drives aren't supported.",
+      "unsupported": "This kind of drive isn't supported.",
+      "unavailable": "Locked or unreadable, so it's skipped."
+    },
+    "otherDrivesNote": "On drives other than the Windows drive, the simple clean only empties the Recycle Bin for now. Searching them for other files comes in a later version.",
+    "resultsCleared": "The drives to scan changed, so the old results were cleared. Scan again.",
+    "error": "Couldn't update the drives: {{error}}"
   },
   "results": {
     "label": "Scan results",
@@ -231,6 +260,7 @@
     "alsoChecked": "Also checked, nothing to clean: {{rules}}",
     "protectedNotice": "Protected \"{{name}}\". It won't show up in results or be cleaned. Manage it on the Protected screen.",
     "protectedRules": "Not scanned, because you protected them: {{rules}}",
+    "notSelected": "Not scanned, because they're on drives you didn't select: {{rules}}",
     "protectError": "Couldn't protect it: {{error}}",
     "notChecked": "Couldn't fully check without administrator rights: {{rules}}. Checking with admin rights arrives in a later version.",
     "needsAdmin": "Needs administrator rights"

@@ -515,7 +515,12 @@ fn build(report: &ScanReport, nodes: &mut Vec<Node>) -> Vec<NodeId> {
 
         let mut roots: Vec<&Path> = Vec::new();
         for &index in findings {
-            let root = report.findings[index].root.as_path();
+            let finding = &report.findings[index];
+            // Each Recycle Bin is its own node already, named after its drive.
+            if matches!(finding.target, Target::RecycleBin { .. }) {
+                continue;
+            }
+            let root = finding.root.as_path();
             if !roots.contains(&root) {
                 roots.push(root);
             }
@@ -680,6 +685,7 @@ mod tests {
             rules,
             findings,
             cancelled: false,
+            drives: None,
         }
     }
 

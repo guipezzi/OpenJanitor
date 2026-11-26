@@ -69,7 +69,12 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
   const protectedRules = overview.rules
     .filter((rule) => rule.status === 'protected')
     .map((rule) => rule.name)
-  const empty = overview.rules.filter((rule) => rule.findings === 0 && rule.status !== 'protected')
+  const elsewhere = overview.rules
+    .filter((rule) => rule.status === 'not_selected')
+    .map((rule) => rule.name)
+  const empty = overview.rules.filter(
+    (rule) => rule.findings === 0 && rule.status !== 'protected' && rule.status !== 'not_selected',
+  )
   const notChecked = empty.filter(couldNotRead).map((rule) => rule.name)
   const nothingFound = empty.filter((rule) => !couldNotRead(rule)).map((rule) => rule.name)
 
@@ -159,6 +164,11 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
       {nothingFound.length > 0 && (
         <p className="text-sm text-muted-foreground">
           {t('results.alsoChecked', { rules: listFormat.format(nothingFound) })}
+        </p>
+      )}
+      {elsewhere.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {t('results.notSelected', { rules: listFormat.format(elsewhere) })}
         </p>
       )}
       {protectedRules.length > 0 && (

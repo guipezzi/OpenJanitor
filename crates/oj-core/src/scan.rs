@@ -24,6 +24,10 @@ pub struct ScanOptions {
     /// Replaces every rule's minimum age, floor included. For the CLI's
     /// `--min-age` only.
     pub min_age_override: Option<Duration>,
+    /// The drive letters to scan (D33): locations on other drives are left
+    /// alone, and the Recycle Bin is read on each of these. `None` scans
+    /// every location, and the Recycle Bin of the system drive.
+    pub drives: Option<Vec<char>>,
     /// "Now", for age calculations. Tests can pin it.
     pub now: SystemTime,
 }
@@ -34,8 +38,17 @@ impl ScanOptions {
             level,
             min_age_floor: None,
             min_age_override: None,
+            drives: None,
             now: SystemTime::now(),
         }
+    }
+
+    /// Whether `path` is on a drive this scan covers.
+    fn covers(&self, path: &Path) -> bool {
+        self.drives.as_ref().is_none_or(|drives| {
+            drive_letter(path)
+                .is_some_and(|drive| drives.iter().any(|d| d.eq_ignore_ascii_case(&drive)))
+        })
     }
 }
 
@@ -84,6 +97,8 @@ pub enum RuleStatus {
     NotDetected,
     /// None of the rule's locations exist on this machine.
     NoLocations,
+    /// Its locations are on drives that aren't selected (D33).
+    NotSelected,
     /// The user protected the whole rule.
     Protected,
 }
@@ -133,6 +148,9 @@ pub struct ScanReport {
     pub findings: Vec<Finding>,
     /// The scan was cancelled, so the report is incomplete.
     pub cancelled: bool,
+    /// The drives it covered ([`ScanOptions::drives`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drives: Option<Vec<char>>,
 }
 
 /// Where a running scan is, for progress displays.
@@ -210,6 +228,7 @@ impl Scanner<'_> {
             rules,
             findings: state.findings,
             cancelled: cancel.is_cancelled(),
+            drives: options.drives.clone(),
         }
     }
 
@@ -251,7 +270,7 @@ impl Scanner<'_> {
         }
         if let Some(builtin) = &rule.builtin {
             match builtin.as_str() {
-                RECYCLE_BIN => self.scan_recycle_bin(compiled, &mut report, state),
+                RECYCLE_BIN => self.scan_recycle_bin(compiled, options, &mut report, state),
                 // Rules can only name known builtins.
                 other => report
                     .warnings
@@ -268,8 +287,18 @@ impl Scanner<'_> {
         }
 
         let mut root_keys = HashSet::new();
+        let mut elsewhere = false;
         for template in &rule.paths {
             match expand(template, self.vars) {
+                // Checked first, so a drive that isn't selected isn't even
+                // looked at.
+                Ok(root) if !options.covers(&root) => {
+                    elsewhere = true;
+                    report.warnings.push(format!(
+                        "{} is on a drive that isn't selected",
+                        root.display()
+                    ));
+                }
                 Ok(root) if root.exists() => {
                     if root_keys.insert(path_key(&root)) {
                         report.roots.push(root);
@@ -282,7 +311,11 @@ impl Scanner<'_> {
             }
         }
         if report.roots.is_empty() {
-            report.status = RuleStatus::NoLocations;
+            report.status = if elsewhere {
+                RuleStatus::NotSelected
+            } else {
+                RuleStatus::NoLocations
+            };
             return report;
         }
 
@@ -334,27 +367,42 @@ impl Scanner<'_> {
         report
     }
 
-    /// The signed-in user's Recycle Bin on the system drive, as one finding
-    /// if it holds anything. Other drives come with drive selection (D15).
-    /// The minimum age doesn't apply: it's emptied as a whole (D32).
+    /// The signed-in user's Recycle Bin on each selected drive (or the
+    /// system drive), one finding per drive that holds anything. The
+    /// minimum age doesn't apply: it's emptied as a whole (D32).
     fn scan_recycle_bin(
         &self,
         compiled: &CompiledRule,
+        options: &ScanOptions,
         report: &mut RuleReport,
         state: &mut State,
     ) {
-        let Some(drive) = self
-            .vars
-            .get("SYSTEMDRIVE")
-            .as_deref()
-            .and_then(drive_letter)
-        else {
-            report.status = RuleStatus::NoLocations;
-            report
-                .warnings
-                .push("%SYSTEMDRIVE% isn't a drive on this machine".into());
-            return;
+        let drives = match &options.drives {
+            Some(drives) => drives.clone(),
+            None => {
+                let system = self.vars.get("SYSTEMDRIVE");
+                let Some(drive) = system.as_deref().and_then(drive_letter) else {
+                    report.status = RuleStatus::NoLocations;
+                    report
+                        .warnings
+                        .push("%SYSTEMDRIVE% isn't a drive on this machine".into());
+                    return;
+                };
+                vec![drive]
+            }
         };
+        for drive in drives {
+            self.scan_one_recycle_bin(compiled, drive.to_ascii_uppercase(), report, state);
+        }
+    }
+
+    fn scan_one_recycle_bin(
+        &self,
+        compiled: &CompiledRule,
+        drive: char,
+        report: &mut RuleReport,
+        state: &mut State,
+    ) {
         let folder = PathBuf::from(format!("{drive}:\\$Recycle.Bin"));
         report.roots.push(folder.clone());
         let contents = match self.recycle_bin.contents(drive) {

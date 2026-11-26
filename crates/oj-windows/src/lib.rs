@@ -13,6 +13,7 @@
 
 pub mod file_move;
 pub mod recycle_bin;
+pub mod volumes;
 
 /// Size and identity information that `std` doesn't expose on stable Rust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

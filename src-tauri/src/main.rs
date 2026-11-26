@@ -10,6 +10,7 @@
 
 mod clean;
 mod commands;
+mod drives;
 mod history;
 mod protected;
 mod quarantine;
@@ -35,6 +36,8 @@ fn main() {
             commands::scan_children,
             commands::reveal_in_explorer,
             commands::open_recycle_bin,
+            drives::drives_overview,
+            drives::select_drives,
             protected::protected_entries,
             protected::protect_item,
             protected::protect_pattern,

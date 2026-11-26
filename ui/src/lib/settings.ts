@@ -14,6 +14,8 @@ export interface Settings {
   medium_days: number
   review_days: number
   theme: ThemeChoice
+  /** The drives to scan, by volume ID; empty means the system drive. Changed on the Clean screen. */
+  drives: string[]
 }
 
 export interface SettingsChoices {
