@@ -15,7 +15,7 @@
 use std::fmt;
 use std::path::{Component, Path, Prefix};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A normalized, absolute path on a local drive.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -25,7 +25,7 @@ pub struct NormPath {
 }
 
 /// Why a path was rejected by [`NormPath::new`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum PathError {
     #[error("the path is not absolute")]

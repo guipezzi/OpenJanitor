@@ -123,7 +123,7 @@ fn denied_paths_are_skipped_even_with_a_valid_snapshot() {
     let outcome = Executor::new(Mode::Live, &s.deny).delete_file(&snap);
     assert_eq!(
         skipped(outcome),
-        SkipReason::Denied(DenyReason::ProtectedTree("the Windows folder"))
+        SkipReason::Denied(DenyReason::ProtectedTree("the Windows folder".into()))
     );
     assert!(file.exists());
 }

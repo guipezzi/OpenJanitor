@@ -11,7 +11,9 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod elevation;
 pub mod file_move;
+pub mod pipe;
 pub mod recycle_bin;
 pub mod volumes;
 

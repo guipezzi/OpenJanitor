@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::path::{NormPath, PathError};
 use crate::system::SystemPaths;
@@ -82,7 +82,7 @@ const PROFILE_DATA_FILES: &[&str] = &[
 ];
 
 /// Why the deny list refused a path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum DenyReason {
     #[error("invalid path: {0}")]
@@ -92,7 +92,7 @@ pub enum DenyReason {
     #[error("the folder {0} itself is protected; only its contents can be cleaned")]
     ProtectedFolder(String),
     #[error("{0} is protected")]
-    ProtectedTree(&'static str),
+    ProtectedTree(String),
     #[error("{0:?} is a protected system or personal name")]
     ProtectedName(String),
     #[error("{0:?} holds personal profile data")]
@@ -220,7 +220,7 @@ impl DenyList {
             })
             .max_by_key(|tree| tree.root.depth());
         match denying {
-            Some(tree) => Err(DenyReason::ProtectedTree(tree.label)),
+            Some(tree) => Err(DenyReason::ProtectedTree(tree.label.to_owned())),
             None => Ok(()),
         }
     }

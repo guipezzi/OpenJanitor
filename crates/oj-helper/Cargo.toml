@@ -1,0 +1,18 @@
+[package]
+name = "oj-helper"
+description = "OpenJanitor's elevated helper: deletes the files of a cleanup that need administrator rights, after checking each one itself."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "openjanitor-helper"
+path = "src/main.rs"
+
+[dependencies]
+oj-core = { path = "../oj-core" }
+oj-safety = { path = "../oj-safety" }
+oj-windows = { path = "../oj-windows" }
+serde_json = "1.0.154"

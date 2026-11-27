@@ -11,6 +11,7 @@
 mod clean;
 mod commands;
 mod drives;
+mod helper;
 mod history;
 mod protected;
 mod quarantine;

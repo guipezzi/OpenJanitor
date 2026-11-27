@@ -6,14 +6,16 @@ mod common;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use common::{FakeMachine, new_file, old_file, write_file};
 use oj_core::{
-    Action, BinSkip, BinTally, CancelToken, CleanProgress, CleanReport, Cleaner, History, NodeId,
-    Plan, Policy, QuarantineGroup, RuleSet, RunningPrograms, ScanResults, SkipCount,
+    Action, BinSkip, BinTally, CancelToken, Checker, CleanProgress, CleanReport, Cleaner,
+    ElevatedError, ElevatedItem, ElevatedRequest, Elevator, HelperMessage, History, NodeId,
+    PROTOCOL_VERSION, Plan, Policy, QuarantineGroup, RuleSet, RunningPrograms, ScanResults,
+    SkipCount,
 };
-use oj_safety::{DenyList, Executor, ItemState, Mode, Store};
+use oj_safety::{DenyList, Executor, ItemState, Mode, ProtectedList, Store};
 use serde_json::Value;
 
 /// One rule per risk level, plus one that needs admin rights.
@@ -133,6 +135,58 @@ fn nothing_running() -> RunningPrograms {
     RunningPrograms::default()
 }
 
+/// How the user answers Windows' administrator prompt.
+#[derive(Clone, Copy)]
+enum Answer {
+    Yes,
+    No,
+    /// The helper couldn't start or stopped.
+    Broken,
+}
+
+/// The elevated helper, in-process: the same checks and the same loop, on
+/// the fake machine, without the UAC prompt.
+struct LocalHelper<'a> {
+    machine: &'a Machine,
+    mode: Mode,
+    answer: Answer,
+}
+
+impl Elevator for LocalHelper<'_> {
+    fn run(
+        &mut self,
+        items: &[ElevatedItem],
+        cancel: &CancelToken,
+        on_message: &mut dyn FnMut(HelperMessage),
+    ) -> Result<(), ElevatedError> {
+        match self.answer {
+            Answer::No => return Err(ElevatedError::Declined),
+            Answer::Broken => return Err(ElevatedError::Failed("the helper stopped".into())),
+            Answer::Yes => {}
+        }
+        let rules = RuleSet::from_sources(&[("test.toml", RULES)]).unwrap();
+        let deny = deny(self.machine);
+        let protected = ProtectedList::new();
+        let executor = Executor::new(self.mode, &deny);
+        let checker = Checker::new(
+            &rules,
+            &self.machine.m.vars,
+            &protected,
+            Duration::ZERO,
+            SystemTime::now(),
+        );
+        let request = ElevatedRequest {
+            version: PROTOCOL_VERSION,
+            mode: self.mode,
+            min_age_floor_secs: 0,
+            protected: Vec::new(),
+            items: items.to_vec(),
+        };
+        oj_core::elevated::serve(&request, &checker, &executor, cancel, on_message);
+        Ok(())
+    }
+}
+
 /// Runs `plan` with no apps open and returns the report and the history
 /// lines it wrote.
 fn run(
@@ -164,14 +218,44 @@ fn run_while(
     on_progress: &mut dyn FnMut(&CleanProgress),
     running: &RunningPrograms,
 ) -> (CleanReport, Vec<Value>) {
+    run_answering(
+        machine,
+        results,
+        plan,
+        executor,
+        cancel,
+        on_progress,
+        running,
+        Answer::Yes,
+    )
+}
+
+/// Runs `plan`, with the administrator prompt answered `answer`.
+#[allow(clippy::too_many_arguments)]
+fn run_answering(
+    machine: &Machine,
+    results: &ScanResults,
+    plan: &Plan,
+    executor: &Executor,
+    cancel: &CancelToken,
+    on_progress: &mut dyn FnMut(&CleanProgress),
+    running: &RunningPrograms,
+    answer: Answer,
+) -> (CleanReport, Vec<Value>) {
     let store = Store::new(machine.m.system.personal_quarantine());
     let history_path = machine.m.system.history_path();
     let mut history = History::open(&history_path).unwrap();
+    let mut helper = LocalHelper {
+        machine,
+        mode: executor.mode(),
+        answer,
+    };
     let report = Cleaner {
         executor,
         store: &store,
         history: &mut history,
         running,
+        elevator: Some(&mut helper),
     }
     .run(results, plan, SystemTime::now(), cancel, on_progress);
     let lines = fs::read_to_string(&history_path)
@@ -213,9 +297,10 @@ fn a_plan_follows_the_selection_and_the_policy() {
             .collect::<Vec<_>>(),
         [(7, 1), (30, 1)]
     );
-    assert_eq!(summary.needs_admin.files, 1, "left out until the helper");
-    assert_eq!(plan.len(), 6);
-    assert_eq!(summary.files(), 6);
+    assert_eq!(summary.elevated.files, 1, "for the elevated helper");
+    assert_eq!(summary.needs_admin.files, 0);
+    assert_eq!(plan.len(), 7);
+    assert_eq!(summary.files(), 7);
 
     // Unselecting a folder inside a selected rule leaves its files out.
     let temp_files = results
@@ -293,13 +378,17 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
             &temp.join(r"busy\fresh.tmp"),
             &machine.system_temp.join("sys.tmp"),
         ]),
-        [false, false, true, true, true, true, true]
+        [false, false, true, true, true, true, false],
+        "the helper deleted sys.tmp"
     );
 
     assert_eq!(report.mode, Mode::Live);
     assert!(!report.cancelled);
-    assert_eq!(report.deleted.files, 4);
-    assert_eq!(report.deleted.size, plan.summary().delete.size);
+    assert_eq!(report.deleted.files, 5);
+    assert_eq!(
+        report.deleted.size,
+        plan.summary().delete.size + plan.summary().elevated.size
+    );
     assert_eq!(
         report
             .quarantined
@@ -316,7 +405,7 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     assert_eq!(report.not_started, 0);
     assert_eq!(report.folders_removed, 3, "setup\\deep, setup, and app");
-    assert_eq!(report.needs_admin.files, 1);
+    assert_eq!(report.needs_admin.files, 0);
     assert_eq!(report.history_error, None);
 
     // Both quarantined files are in one batch, ready to restore.
@@ -345,8 +434,9 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
         ]
     );
 
-    assert_eq!(progress.len(), 6);
-    assert_eq!(progress.last().unwrap().done, 6);
+    assert!(progress[0].admin_prompt, "waiting for the prompt first");
+    assert_eq!(progress.len(), 8);
+    assert_eq!(progress.last().unwrap().done, 7);
     assert_eq!(progress.last().unwrap().freed, report.deleted.size);
 
     // One line per file, one per removed folder, then the totals.
@@ -354,7 +444,7 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
         .iter()
         .map(|l| l["type"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds.iter().filter(|k| **k == "file").count(), 6);
+    assert_eq!(kinds.iter().filter(|k| **k == "file").count(), 7);
     assert_eq!(kinds.iter().filter(|k| **k == "folder").count(), 3);
     assert_eq!(kinds.last(), Some(&"cleanup"));
     let cleanup = &history[0]["cleanup"];
@@ -373,7 +463,7 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
     assert_eq!(quarantined["batch"], report.batch.as_deref().unwrap());
     assert_eq!(quarantined["mode"], "live");
     let totals = history.last().unwrap();
-    assert_eq!(totals["deleted"]["files"], 4);
+    assert_eq!(totals["deleted"]["files"], 5);
     assert_eq!(totals["folders_removed"], 3);
 
     // The History screen reads it back as one entry.
@@ -382,10 +472,10 @@ fn a_cleanup_deletes_quarantines_and_tidies_up() {
         panic!("one entry expected, got {:?}", view.entries());
     };
     assert_eq!(entry.kind, oj_core::EntryKind::Cleanup);
-    assert_eq!(entry.files, 6);
+    assert_eq!(entry.files, 7);
     assert_eq!(entry.freed, report.deleted.size);
     assert_eq!(entry.quarantined.files, 2);
-    assert_eq!(entry.details, 9, "6 files and 3 folders");
+    assert_eq!(entry.details, 10, "7 files and 3 folders");
     assert_eq!(view.totals().freed, report.deleted.size);
     assert_eq!(view.totals().cleanups, 1);
 }
@@ -423,7 +513,7 @@ fn a_dry_run_changes_nothing() {
     );
     assert!(!machine.m.system.personal_quarantine().exists());
     assert_eq!(report.mode, Mode::DryRun);
-    assert_eq!(report.deleted.files, 4, "what would be deleted");
+    assert_eq!(report.deleted.files, 5, "what would be deleted");
     assert_eq!(report.quarantined.len(), 2);
     assert_eq!(report.batch, None);
     assert_eq!(report.folders_removed, 0);
@@ -432,7 +522,7 @@ fn a_dry_run_changes_nothing() {
         .filter(|l| l["type"] == "file")
         .map(|l| l["result"].as_str().unwrap())
         .collect();
-    assert_eq!(results.iter().filter(|r| **r == "would_delete").count(), 4);
+    assert_eq!(results.iter().filter(|r| **r == "would_delete").count(), 5);
     assert_eq!(
         results.iter().filter(|r| **r == "would_quarantine").count(),
         2
@@ -454,7 +544,7 @@ fn files_that_changed_or_are_protected_or_in_use_are_skipped() {
         .map(|c| (c.id, true))
         .collect();
     let plan = Plan::build(&results, &choices, &Policy::default(), &nothing_running());
-    assert_eq!(plan.len(), 4);
+    assert_eq!(plan.len(), 5, "4 temp files and the system one");
 
     write_file(&temp.join("a.tmp"), 100);
     let _open = fs::OpenOptions::new()
@@ -474,7 +564,10 @@ fn files_that_changed_or_are_protected_or_in_use_are_skipped() {
         &mut |_| {},
     );
 
-    assert_eq!(report.deleted.files, 1, "only setup\\x.log");
+    assert_eq!(
+        report.deleted.files, 2,
+        "setup\\x.log, and sys.tmp by the helper"
+    );
     assert_eq!(
         report.skipped,
         [
@@ -514,12 +607,15 @@ fn cancelling_stops_before_the_next_file() {
     let executor = Executor::new(Mode::Live, &deny);
     let cancel = CancelToken::new();
 
-    let (report, history) = run(&machine, &results, &plan, &executor, &cancel, &mut |_| {
-        cancel.cancel()
+    // Stops after the first file (the helper's, which goes first).
+    let (report, history) = run(&machine, &results, &plan, &executor, &cancel, &mut |p| {
+        if p.done > 0 {
+            cancel.cancel()
+        }
     });
 
     assert!(report.cancelled);
-    assert_eq!(report.not_started, 5);
+    assert_eq!(report.not_started, 6);
     assert_eq!(report.deleted.files + report.quarantined.len() as u64, 1);
     let files = history.iter().filter(|l| l["type"] == "file").count();
     assert_eq!(files, 1);
@@ -640,7 +736,7 @@ fn an_app_opened_after_the_plan_keeps_its_files() {
             files: 2
         }]
     );
-    assert_eq!(report.deleted.files, 4);
+    assert_eq!(report.deleted.files, 5);
     let skipped = history
         .iter()
         .filter(|l| l["reason"]["kind"] == "app_running")
@@ -704,7 +800,7 @@ fn the_recycle_bin_is_emptied_whole_and_recorded() {
     );
     assert_eq!(plan.summary().recycle_bins, [FIVE_ITEMS]);
     assert_eq!(plan.summary().delete.files, 4, "files are counted apart");
-    assert_eq!(plan.len(), 7, "6 files and the Recycle Bin");
+    assert_eq!(plan.len(), 8, "7 files and the Recycle Bin");
 
     let deny = deny(&machine);
     let executor = Executor::new(Mode::Live, &deny).with_recycle_bin(&machine.m.bin);
@@ -721,7 +817,7 @@ fn the_recycle_bin_is_emptied_whole_and_recorded() {
     assert_eq!(machine.m.bin.emptied(), ['C']);
     assert_eq!(report.recycle_bins, [FIVE_ITEMS]);
     assert!(report.recycle_bins_skipped.is_empty());
-    assert_eq!(report.deleted.files, 4);
+    assert_eq!(report.deleted.files, 5);
     assert_eq!(
         progress.last().unwrap().freed,
         report.deleted.size + 50_000,
@@ -743,7 +839,7 @@ fn the_recycle_bin_is_emptied_whole_and_recorded() {
     let view = oj_core::HistoryView::load(&machine.m.system.history_path()).unwrap();
     let entry = &view.entries()[0];
     assert_eq!(entry.freed, report.deleted.size + 50_000);
-    assert_eq!(entry.files, 6 + 5, "its items count as files");
+    assert_eq!(entry.files, 7 + 5, "its items count as files");
     let files = view.files(0, 0, 100).unwrap().items;
     let bin = files.iter().find(|f| f.items.is_some()).unwrap();
     assert_eq!((bin.items, bin.result.as_str()), (Some(5), "deleted"));
@@ -832,4 +928,113 @@ fn always_using_the_quarantine_leaves_the_recycle_bin_out() {
     );
     assert!(machine.m.bin.emptied().is_empty());
     assert_eq!(report.recycle_bins_kept, [FIVE_ITEMS]);
+}
+
+// ----- Files that need administrator rights (D34) -----
+
+/// The plan for the system temp rule alone.
+fn system_plan(results: &ScanResults, policy: &Policy) -> Plan {
+    let category = results
+        .categories()
+        .into_iter()
+        .find(|c| c.name == "temporary-files")
+        .unwrap();
+    let rule = category
+        .children
+        .unwrap()
+        .into_iter()
+        .find(|r| r.rule_id.as_deref() == Some("test.system"))
+        .unwrap();
+    Plan::build(
+        results,
+        &HashMap::from([(rule.id, true)]),
+        policy,
+        &nothing_running(),
+    )
+}
+
+#[test]
+fn declining_the_prompt_leaves_admin_files_alone() {
+    let machine = machine();
+    let results = scan(&machine);
+    let plan = Plan::build(
+        &results,
+        &everything(&results),
+        &Policy::default(),
+        &nothing_running(),
+    );
+    let deny = deny(&machine);
+    let executor = Executor::new(Mode::Live, &deny);
+
+    let (report, history) = run_answering(
+        &machine,
+        &results,
+        &plan,
+        &executor,
+        &CancelToken::new(),
+        &mut |_| {},
+        &nothing_running(),
+        Answer::No,
+    );
+
+    assert!(machine.system_temp.join("sys.tmp").exists());
+    assert_eq!(
+        report.skipped,
+        [SkipCount {
+            reason: "admin_declined",
+            files: 1
+        }]
+    );
+    assert_eq!(report.deleted.files, 4, "the user's own files still go");
+    assert!(!report.cancelled);
+    let line = history
+        .iter()
+        .find(|l| l["rule_id"] == "test.system")
+        .unwrap();
+    assert_eq!(line["result"], "skipped");
+    assert_eq!(line["reason"]["kind"], "admin_declined");
+}
+
+#[test]
+fn a_broken_helper_leaves_admin_files_alone() {
+    let machine = machine();
+    let results = scan(&machine);
+    let plan = system_plan(&results, &Policy::default());
+    let deny = deny(&machine);
+    let executor = Executor::new(Mode::Live, &deny);
+
+    let (report, _) = run_answering(
+        &machine,
+        &results,
+        &plan,
+        &executor,
+        &CancelToken::new(),
+        &mut |_| {},
+        &nothing_running(),
+        Answer::Broken,
+    );
+
+    assert!(machine.system_temp.join("sys.tmp").exists());
+    assert_eq!(
+        report.skipped,
+        [SkipCount {
+            reason: "failed",
+            files: 1
+        }]
+    );
+}
+
+#[test]
+fn admin_files_that_would_go_to_quarantine_are_left_out() {
+    let machine = machine();
+    let results = scan(&machine);
+    let careful = Policy {
+        low: Action::Quarantine { days: 7 },
+        ..Policy::default()
+    };
+
+    let plan = system_plan(&results, &careful);
+    assert!(plan.is_empty(), "the system quarantine comes later");
+    assert_eq!(plan.summary().needs_admin.files, 1);
+    assert_eq!(plan.summary().elevated.files, 0);
 }

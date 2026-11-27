@@ -3,7 +3,7 @@
   "productName": "OpenJanitor",
   "identifier": "io.github.guipezzi.openjanitor",
   "build": {
-    "beforeDevCommand": "npm run dev --workspace ui",
+    "beforeDevCommand": "cargo build -p oj-helper && npm run dev --workspace ui",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build --workspace ui",
     "frontendDist": "../ui/dist"
