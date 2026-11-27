@@ -178,6 +178,7 @@ const overview: ScanOverview = {
     }),
     node(4, 'category', 'crash-reports', 10, 1_048_576, { children: [dumps] }),
   ],
+  cleanable_by_drive: [{ drive: 'C', files: 1157, size: 209_086_054 }],
 }
 
 const setupFolder = node(10, 'folder', 'setup', 2, 300, {
@@ -632,16 +633,16 @@ describe('App', () => {
 
     expect(scan).toHaveBeenCalledWith('simple', expect.any(Function))
     expect(screen.getByText('can be freed from 1,157 files')).toBeInTheDocument()
-    expect(screen.getByText('Temporary files')).toBeInTheDocument()
-    expect(screen.getByText('Crash and error reports')).toBeInTheDocument()
-    expect(screen.getByText('User temporary files')).toBeInTheDocument()
+    const tree = screen.getByRole('group', { name: 'Scan results' })
+    expect(within(tree).getByText('Temporary files')).toBeInTheDocument()
+    expect(within(tree).getByText('Crash and error reports')).toBeInTheDocument()
+    expect(within(tree).getByText('User temporary files')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Needs administrator rights' })).toBeInTheDocument()
     expect(screen.getByText('Also checked, nothing to clean: Thumbnail cache')).toBeInTheDocument()
     expect(
       screen.getByText(/Couldn't fully check without administrator rights: System crash dumps\./),
     ).toBeInTheDocument()
     expect(screen.getByText('Nothing selected')).toBeInTheDocument()
-    const tree = screen.getByRole('group', { name: 'Scan results' })
     for (const box of within(tree).getAllByRole('checkbox')) {
       expect(box).toHaveAttribute('aria-checked', 'false')
     }
@@ -673,6 +674,27 @@ describe('App', () => {
     expect(footer()).toHaveTextContent('1,098 files selected')
     expect(screen.getByRole('checkbox', { name: 'Select User temporary files' })).toHaveAttribute('aria-checked', 'mixed')
     expect(screen.getByRole('checkbox', { name: 'Select old.tmp' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('shows where the space is, and picks a category from the chart legend', async () => {
+    await scanned()
+    const legend = screen.getByRole('list', { name: 'Space that can be freed, by category' })
+    const rows = within(legend).getAllByRole('button')
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'Temporary files198.4 MB99%',
+      'Crash and error reports1.0 MB<1%',
+    ])
+
+    fireEvent.click(rows[1])
+    const details = screen.getByRole('complementary', { name: 'Details' })
+    expect(within(details).getByText('Category')).toBeInTheDocument()
+    expect(within(details).getByText('Crash and error reports')).toBeInTheDocument()
+    expect(document.activeElement?.textContent).toContain('Crash and error reports')
+
+    // The drive bar shows what the scan found on C:.
+    const usage = screen.getByRole('list', { name: 'Space on Windows-SSD (C:)' })
+    expect(within(usage).getByText('199.4 MB can be freed')).toBeInTheDocument()
+    expect(within(usage).getByText('47.3 GB free')).toBeInTheDocument()
   })
 
   it('explains an item and opens it in Explorer', async () => {

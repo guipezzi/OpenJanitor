@@ -445,7 +445,7 @@ impl Scanner<'_> {
 
 /// The drive a path is on: `C:` (or `C:\…`) → `'C'`. `None` for anything
 /// else, such as a network path.
-fn drive_letter(path: &Path) -> Option<char> {
+pub(crate) fn drive_letter(path: &Path) -> Option<char> {
     let mut chars = path.to_str()?.chars();
     let letter = chars.next().filter(char::is_ascii_alphabetic)?;
     (chars.next() == Some(':')).then(|| letter.to_ascii_uppercase())

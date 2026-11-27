@@ -1,4 +1,4 @@
-import { LoaderCircle, Search, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react'
+import { LoaderCircle, Search, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -10,6 +10,7 @@ import { HistoryScreen } from '@/components/history-screen'
 import { ProtectedScreen } from '@/components/protected-screen'
 import { QuarantineScreen } from '@/components/quarantine-screen'
 import { ResultsView } from '@/components/results-view'
+import { ScanSummary } from '@/components/scan-summary'
 import { SettingsScreen } from '@/components/settings-screen'
 import { ScanProgressPanel } from '@/components/scan-progress'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -21,7 +22,6 @@ import {
   type CleanProgress,
   type CleanReport,
 } from '@/lib/clean'
-import { formatBytes } from '@/lib/format'
 import {
   cancelScan,
   canScan,
@@ -38,7 +38,7 @@ interface Failure {
 }
 
 export default function App() {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const [screen, setScreen] = useState<Screen>('clean')
   const [overview, setOverview] = useState<ScanOverview | null>(null)
   const [scanning, setScanning] = useState(false)
@@ -50,6 +50,8 @@ export default function App() {
   const [report, setReport] = useState<CleanReport | null>(null)
   const [error, setError] = useState<Failure | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // Bumped after each scan and cleanup, so the drive bars show fresh space.
+  const [drivesVersion, setDrivesVersion] = useState(0)
   const busy = scanning || cleaning !== null
 
   // The Rust side forgot the results: they no longer match the drives.
@@ -85,6 +87,7 @@ export default function App() {
       setScanning(false)
       setCancelling(false)
       setProgress(null)
+      setDrivesVersion((version) => version + 1)
     }
   }
 
@@ -112,6 +115,7 @@ export default function App() {
       setCleaning(null)
       setStopping(false)
       setCleanProgress(null)
+      setDrivesVersion((version) => version + 1)
     }
   }
 
@@ -139,44 +143,26 @@ export default function App() {
   } else if (report) {
     content = <CleanSummary report={report} />
   } else if (overview) {
-    content = (
-      <>
-        <div className="flex items-center gap-4 rounded-xl border bg-card p-5">
-          <Sparkles className="size-8 shrink-0 text-primary" />
-          <div className="flex-1">
-            <p className="text-3xl font-semibold tabular-nums">
-              {formatBytes(overview.size_on_disk_total, i18n.language)}
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {/* Files, plus the Recycle Bin's items. */}
-              {t('scan.summary', {
-                count: overview.categories.reduce((sum, category) => sum + category.file_count, 0),
-              })}
-            </p>
-          </div>
-          <p className="hidden max-w-56 items-center gap-2 text-xs text-muted-foreground md:flex">
-            <ShieldCheck className="size-4 shrink-0" />
-            {t('scan.nothingDeleted')}
-          </p>
-        </div>
-        {overview.categories.length > 0 ? (
-          <ResultsView
-            key={overview.scan_id}
-            overview={overview}
-            onOverviewChange={setOverview}
-            onClean={(plan) => void clean(plan)}
-            onScanAgain={() => void runScan()}
-          />
-        ) : (
+    content =
+      overview.categories.length > 0 ? (
+        <ResultsView
+          key={overview.scan_id}
+          overview={overview}
+          onOverviewChange={setOverview}
+          onClean={(plan) => void clean(plan)}
+          onScanAgain={() => void runScan()}
+        />
+      ) : (
+        <>
+          <ScanSummary overview={overview} />
           <p className="pb-6 text-sm text-muted-foreground">
             {/* Not "already tidy" when the Windows drive wasn't even looked at. */}
             {overview.rules.some((rule) => rule.status === 'not_selected')
               ? t('scan.nothingFoundOnSelected')
               : t('scan.nothingFound')}
           </p>
-        )}
-      </>
-    )
+        </>
+      )
   } else if (!error) {
     content = (
       <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed bg-card py-12 text-center text-sm text-muted-foreground">
@@ -213,7 +199,13 @@ export default function App() {
           </header>
 
           {canScan() && (
-            <DriveSelector active={screen === 'clean'} disabled={busy} onChange={drivesChanged} />
+            <DriveSelector
+              active={screen === 'clean'}
+              version={drivesVersion}
+              cleanable={overview?.cleanable_by_drive}
+              disabled={busy}
+              onChange={drivesChanged}
+            />
           )}
 
           {error && (

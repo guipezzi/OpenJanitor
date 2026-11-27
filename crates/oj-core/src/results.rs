@@ -14,7 +14,7 @@ use oj_safety::ProtectedList;
 use serde::Serialize;
 
 use crate::rule::Risk;
-use crate::scan::{Finding, ScanReport, Target};
+use crate::scan::{Finding, ScanReport, Target, drive_letter};
 
 /// A node's number, valid for the results it came from.
 pub type NodeId = u32;
@@ -82,6 +82,16 @@ pub struct NodeView {
     /// children are fetched with [`ScanResults::children`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<NodeView>>,
+}
+
+/// What the results could free on one drive, for its usage bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct DriveTally {
+    /// Such as `C`.
+    pub drive: char,
+    /// Files, plus the items of a Recycle Bin.
+    pub files: u64,
+    pub size: u64,
 }
 
 /// One page of a node's children.
@@ -250,6 +260,33 @@ impl ScanResults {
     /// The path of a location, folder, or file node.
     pub fn path(&self, id: NodeId) -> Option<&Path> {
         self.nodes.get(id as usize)?.path.as_deref()
+    }
+
+    /// What the visible findings could free on each drive, by letter.
+    pub fn by_drive(&self) -> Vec<DriveTally> {
+        let mut drives: Vec<DriveTally> = Vec::new();
+        for node in self.nodes.iter().filter(|node| !node.hidden) {
+            let Some(index) = node.finding else { continue };
+            let finding = &self.report.findings[index];
+            let Some(drive) = drive_letter(&finding.path) else {
+                continue;
+            };
+            let tally = match drives.iter_mut().find(|tally| tally.drive == drive) {
+                Some(tally) => tally,
+                None => {
+                    drives.push(DriveTally {
+                        drive,
+                        files: 0,
+                        size: 0,
+                    });
+                    drives.last_mut().expect("just pushed")
+                }
+            };
+            tally.files += finding.file_count;
+            tally.size += finding.size_on_disk;
+        }
+        drives.sort_by_key(|tally| tally.drive);
+        drives
     }
 
     /// Every finding inside `id`. Empty if there's no such node (or it's
@@ -1028,6 +1065,37 @@ mod tests {
             path_of(&results, results.selected(&choices)),
             ["c.tmp"],
             "hidden files are never selected, even with their own choice"
+        );
+    }
+
+    #[test]
+    fn space_to_free_is_counted_per_drive() {
+        let mut results = ScanResults::new(report(
+            vec![
+                rule("temp", "temporary-files", Risk::Low, false),
+                rule("other", "logs", Risk::Medium, false),
+            ],
+            &[
+                ("temp", TEMP, "a.tmp", 100),
+                ("temp", TEMP, "b.tmp", 50),
+                ("other", r"D:\Logs", "x.log", 7),
+            ],
+        ));
+        let tally = |drive, files, size| DriveTally { drive, files, size };
+        assert_eq!(results.by_drive(), [tally('C', 2, 150), tally('D', 1, 7)]);
+
+        let list = ProtectedList::from_entries(vec![oj_safety::Entry {
+            kind: oj_safety::EntryKind::File,
+            value: format!(r"{TEMP}\a.tmp"),
+            label: None,
+            added_at: 0,
+        }])
+        .unwrap();
+        results.hide_protected(&list);
+        assert_eq!(
+            results.by_drive(),
+            [tally('C', 1, 50), tally('D', 1, 7)],
+            "protected files don't count"
         );
     }
 

@@ -120,6 +120,7 @@ export function ResultsTree({
         return (
           <div
             key={node.id}
+            data-node-id={node.id}
             data-focused={focusedId === node.id}
             className={cn(
               'flex items-center gap-2 rounded-md py-1 pr-2 hover:bg-muted/60',
@@ -148,6 +149,7 @@ export function ResultsTree({
             />
             <button
               type="button"
+              data-row-name
               className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-0.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               onClick={() => onFocus(node)}
             >
