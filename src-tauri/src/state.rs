@@ -9,9 +9,10 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_core::{
-    CancelToken, ChildPage, DETAIL_DAYS, HistoryEntry, HistoryFilePage, HistoryTotals, HistoryView,
-    ItemRef, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy, QuarantineReport,
-    QuarantineSummary, QuarantineView, RuleReport, RunningPrograms, ScanReport, ScanResults,
+    CancelToken, ChildPage, DETAIL_DAYS, DriveTally, HistoryEntry, HistoryFilePage, HistoryTotals,
+    HistoryView, ItemRef, Level, NodeId, NodeKind, NodeView, Plan, PlanSummary, Policy,
+    QuarantineReport, QuarantineSummary, QuarantineView, RuleReport, RunningPrograms, ScanReport,
+    ScanResults,
 };
 use oj_safety::{Entry, EntryKind, Mode, ProtectedList};
 use serde::Serialize;
@@ -34,6 +35,8 @@ pub struct ScanOverview {
     pub rules: Vec<RuleReport>,
     /// Categories, biggest first, each with its rules.
     pub categories: Vec<NodeView>,
+    /// What the results could free on each drive, for the drive bars.
+    pub cleanable_by_drive: Vec<DriveTally>,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,6 +167,7 @@ fn overview(id: u64, results: &ScanResults) -> ScanOverview {
         size_on_disk_total: report.size_on_disk_total,
         rules: report.rules.clone(),
         categories: results.categories(),
+        cleanable_by_drive: results.by_drive(),
     }
 }
 

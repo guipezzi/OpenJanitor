@@ -10,6 +10,12 @@ function isKnownCategory(id: string): id is CategoryId {
   return Object.hasOwn(en.categories, id)
 }
 
+/** A category's display name, from its id ("browser-caches"). */
+export function useCategoryName() {
+  const { t } = useTranslation()
+  return (id: string): string => (isKnownCategory(id) ? t(`categories.${id}`) : id)
+}
+
 /**
  * A node's display name. Categories have translated names, a Recycle Bin is
  * named after its drive, and quarantine batches after their cleanup's date;

@@ -209,6 +209,11 @@
     "nothingFound": "Nothing to clean right now. Everything this scan looks for is already tidy.",
     "nothingFoundOnSelected": "Nothing to clean on the selected drives. Most temporary files and caches are on the Windows drive, which isn't selected."
   },
+  "chart": {
+    "label": "Space that can be freed, by category",
+    "other": "Other",
+    "showInList": "Show it in the list"
+  },
   "drives": {
     "title": "Drives to scan",
     "refresh": "Check the drives again",
@@ -216,7 +221,14 @@
     "unnamed": "Local disk",
     "system": "Windows",
     "lastOne": "At least one drive is always scanned.",
-    "free": "{{free}} free of {{total}}",
+    "size": "{{size}}",
+    "usage": {
+      "label": "Space on {{name}}",
+      "cleanable": "{{size}} can be freed",
+      "used": "{{size}} used",
+      "otherUsed": "{{size}} used by other files",
+      "free": "{{size}} free"
+    },
     "media": {
       "ssd": "SSD",
       "hdd": "Hard disk",

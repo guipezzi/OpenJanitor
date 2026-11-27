@@ -59,7 +59,7 @@ describe('DriveSelector', () => {
     expect(screen.getByText('Windows-SSD (C:)')).toBeInTheDocument()
     expect(screen.getByText('Windows')).toBeInTheDocument()
     expect(screen.getByText(/SSD · Internal · NTFS/)).toBeInTheDocument()
-    expect(screen.getByText('47.3 GB free of 474.7 GB')).toBeInTheDocument()
+    expect(screen.getByText('47.3 GB free')).toBeInTheDocument()
     expect(screen.getByText('Local disk (D:)')).toBeInTheDocument()
     expect(screen.getByText(/Hard disk · External · NTFS/)).toBeInTheDocument()
     expect(screen.getByText("Network drives aren't supported.")).toBeInTheDocument()
@@ -99,10 +99,34 @@ describe('DriveSelector', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  it('shows how full each drive is, and what the results can free', async () => {
+    vi.mocked(drivesOverview).mockResolvedValue({ drives: [C, D] })
+    render(
+      <DriveSelector
+        active
+        disabled={false}
+        onChange={vi.fn()}
+        cleanable={[{ drive: 'C', files: 10, size: 2_254_857_830 }]}
+      />,
+    )
+    const c = await screen.findByRole('list', { name: 'Space on Windows-SSD (C:)' })
+    expect(within(c).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      '2.1 GB can be freed',
+      '425.3 GB used by other files',
+      '47.3 GB free',
+    ])
+    // Nothing found on D: (or not scanned): just used and free.
+    const d = screen.getByRole('list', { name: 'Space on Local disk (D:)' })
+    expect(within(d).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      '48.0 GB used',
+      '1.8 TB free',
+    ])
+    expect(screen.getByText(/SSD · Internal · NTFS · 474.7 GB/)).toBeInTheDocument()
+  })
+
   it('disables every drive while scanning or cleaning', async () => {
     await shown([C, D], { disabled: true })
-    const list = screen.getByRole('list')
-    for (const checkbox of within(list).getAllByRole('checkbox')) {
+    for (const checkbox of screen.getAllByRole('checkbox')) {
       expect(checkbox).toBeDisabled()
     }
     expect(screen.getByRole('button', { name: 'Check the drives again' })).toBeDisabled()

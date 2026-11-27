@@ -118,6 +118,16 @@ export interface ScanOverview {
   rules: RuleReport[]
   /** Categories, biggest first, each with its rules in `children`. */
   categories: NodeView[]
+  /** What the results could free on each drive, for the drive bars. */
+  cleanable_by_drive: DriveTally[]
+}
+
+/** What the results could free on one drive (oj_core::DriveTally). */
+export interface DriveTally {
+  /** Such as "C". */
+  drive: string
+  files: number
+  size: number
 }
 
 export type ScanOutcome =

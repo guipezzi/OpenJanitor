@@ -421,6 +421,7 @@ Each view answers one question. They all show the same data, and the user can sw
 - **Read-only at first.** Actions: Open in Explorer, Protect, Scan this folder for cleanable items. Deleting arbitrary user files from the chart is out of scope. If it's ever added, it goes through quarantine and the deny list like everything else.
 - **Accessible:** colors come from a fixed categorical palette checked for color blindness, every chart has a legend, and the sorted list doubles as the table view.
 - **Optional, later:** a before/after bar at the end of each cleanup, and a free-space-over-time line built from History.
+- **Phase 1 uses scan results only** (no full-disk scan): each drive in the selector has a thin segmented bar of what the last scan can free, the rest of the used space, and the free space, with a legend that gives each amount; and the results start with a donut of the cleanable space by category, at most 6 slices plus "Other", whose legend lists every slice with its size and share and selects its category in the tree. Each category keeps one color whatever its rank. ECharts loads on first use, so it doesn't slow the app's start.
 
 ### 7.9 Drive selection
 
@@ -532,7 +533,7 @@ Small PRs in four blocks. Each one leaves the app working. The Clean button only
    - **10a. Drives** ([§7.9](#79-drive-selection), D33): detection (internal or external, SSD or hard disk), the selector on the Clean screen, scans limited to the selected drives, and the Recycle Bin of each.
    - **10b. Charts** ([§7.8](#78-disk-usage-visualization)): a segmented bar per selected drive (cleanable space found, other used space, free), drawn in HTML, and a donut of cleanable space by category (at most 6 plus "Other", with a legend) drawn with ECharts, whose slices select their category in the tree.
 11. **Elevated helper v1** ([§4.6](#46-privilege-model)) for admin-only items such as Windows temp files, with one UAC prompt per cleanup.
-12. **Installer and release.** Per-machine NSIS installer, a GitHub Actions workflow that builds it for each version tag, and an end-to-end test in Windows Sandbox as a first-time user, including a real (not dry-run) cleanup that empties the Recycle Bin. Then the pt-BR translation and v0.1.0.
+12. **Installer and release.** Per-machine NSIS installer, a GitHub Actions workflow that builds it for each version tag, and an end-to-end test in Windows Sandbox as a first-time user, including a real (not dry-run) cleanup that empties the Recycle Bin. The installer credits the bundled libraries, including ECharts' Apache-2.0 NOTICE. Then the pt-BR translation and v0.1.0.
 
 ### Phase 2 — Advanced clean
 

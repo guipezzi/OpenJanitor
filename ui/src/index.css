@@ -83,6 +83,23 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    /* Charts (PLANNING.md section 7.8). Plain hex, because ECharts reads
+       them; the categorical slots were checked for color blindness on these
+       surfaces. One fixed slot per category, so a color never changes with
+       a category's rank. */
+    --chart-surface: #ffffff;
+    --chart-ink: #0b0b0b;
+    --chart-ink-muted: #52514e;
+    --chart-border: rgba(11, 11, 11, 0.1);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #6250d6;
+    --series-8: #e34948;
+    --series-other: #898781;
 }
 
 .dark {
@@ -118,6 +135,19 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+    --chart-surface: #171717;
+    --chart-ink: #f0efec;
+    --chart-ink-muted: #c3c2b7;
+    --chart-border: rgba(255, 255, 255, 0.1);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #0ca30c;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-other: #898781;
 }
 
 @layer base {

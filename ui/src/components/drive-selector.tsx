@@ -6,11 +6,16 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { drivesOverview, selectDrives, selectionKey, type Drive } from '@/lib/drives'
 import { formatBytes } from '@/lib/format'
+import type { DriveTally } from '@/lib/scan'
 import { cn } from '@/lib/utils'
 
 interface DriveSelectorProps {
   /** Reload whenever the Clean screen is shown, in case a drive was plugged in. */
   active: boolean
+  /** Changes after each scan and cleanup, to show fresh free space. */
+  version?: number
+  /** What the current results could free on each drive. */
+  cleanable?: readonly DriveTally[]
   /** While scanning or cleaning, the choice can't change. */
   disabled: boolean
   /** The selection changed, so the Rust side forgot the results. */
@@ -18,7 +23,7 @@ interface DriveSelectorProps {
 }
 
 /** Which drives a scan covers (PLANNING.md section 7.9 and D33). */
-export function DriveSelector({ active, disabled, onChange }: DriveSelectorProps) {
+export function DriveSelector({ active, version = 0, cleanable, disabled, onChange }: DriveSelectorProps) {
   const { t } = useTranslation()
   const titleId = useId()
   const [drives, setDrives] = useState<Drive[] | null>(null)
@@ -42,7 +47,7 @@ export function DriveSelector({ active, disabled, onChange }: DriveSelectorProps
     return () => {
       current = false
     }
-  }, [active, checks])
+  }, [active, checks, version])
 
   if (!drives && !error) return null
 
@@ -91,6 +96,7 @@ export function DriveSelector({ active, disabled, onChange }: DriveSelectorProps
             <DriveCard
               key={drive.letter}
               drive={drive}
+              cleanable={cleanable?.find((tally) => tally.drive === drive.letter)?.size ?? 0}
               // The last selected drive stays selected: a scan needs one.
               locked={drive.selected && selected.length === 1}
               disabled={disabled || saving}
@@ -111,12 +117,14 @@ export function DriveSelector({ active, disabled, onChange }: DriveSelectorProps
 
 interface DriveCardProps {
   drive: Drive
+  /** What the current results could free on it. */
+  cleanable: number
   locked: boolean
   disabled: boolean
   onToggle: () => void
 }
 
-function DriveCard({ drive, locked, disabled, onToggle }: DriveCardProps) {
+function DriveCard({ drive, cleanable, locked, disabled, onToggle }: DriveCardProps) {
   const { t, i18n } = useTranslation()
   const id = useId()
   const ready = drive.status === 'ready'
@@ -152,7 +160,7 @@ function DriveCard({ drive, locked, disabled, onToggle }: DriveCardProps) {
         aria-describedby={`${id}-detail`}
         title={locked ? t('drives.lastOne') : undefined}
       />
-      <div className="min-w-0 flex-1 space-y-0.5">
+      <div className="min-w-0 flex-1 space-y-1">
         <label htmlFor={id} className="flex items-center gap-1.5 text-sm font-medium">
           <Icon className="size-4 shrink-0 text-muted-foreground" />
           <span className="truncate">{name}</span>
@@ -163,28 +171,81 @@ function DriveCard({ drive, locked, disabled, onToggle }: DriveCardProps) {
           )}
         </label>
         <p id={`${id}-detail`} className="text-xs text-muted-foreground">
-          {ready ? (
-            <>
-              {[
+          {ready
+            ? [
                 t(`drives.media.${drive.media}`),
                 t(`drives.connection.${drive.connection}`),
                 drive.file_system,
+                formatBytes(drive.total, i18n.language),
               ]
                 .filter(Boolean)
-                .join(' · ')}
-              <br />
-              <span className="tabular-nums">
-                {t('drives.free', {
-                  free: formatBytes(drive.free, i18n.language),
-                  total: formatBytes(drive.total, i18n.language),
-                })}
-              </span>
-            </>
-          ) : (
-            t(`drives.status.${drive.status}`)
-          )}
+                .join(' · ')
+            : t(`drives.status.${drive.status}`)}
         </p>
+        {ready && drive.total > 0 && <DriveUsage drive={drive} name={name} cleanable={cleanable} />}
       </div>
     </li>
+  )
+}
+
+/**
+ * How full a drive is (PLANNING.md section 7.8): a thin segmented bar of
+ * what the last scan can free, the rest of the used space, and the free
+ * space, with a legend that gives each amount.
+ */
+function DriveUsage({ drive, name, cleanable }: { drive: Drive; name: string; cleanable: number }) {
+  const { t, i18n } = useTranslation()
+  const size = (bytes: number) => formatBytes(bytes, i18n.language)
+  const used = Math.max(0, drive.total - drive.free)
+  const freeable = Math.min(cleanable, used)
+  const parts = [
+    {
+      key: 'cleanable',
+      bytes: freeable,
+      color: 'bg-primary',
+      label: t('drives.usage.cleanable', { size: size(freeable) }),
+    },
+    {
+      key: 'used',
+      bytes: used - freeable,
+      color: 'bg-muted-foreground/55',
+      label:
+        freeable > 0
+          ? t('drives.usage.otherUsed', { size: size(used - freeable) })
+          : t('drives.usage.used', { size: size(used) }),
+    },
+    {
+      key: 'free',
+      bytes: drive.free,
+      color: 'bg-foreground/10',
+      label: t('drives.usage.free', { size: size(drive.free) }),
+    },
+  ].filter((part) => part.bytes > 0)
+
+  return (
+    <div className="space-y-1">
+      {/* The legend says the same in words. */}
+      <div aria-hidden className="flex h-2 gap-0.5 overflow-hidden rounded-full">
+        {parts.map((part) => (
+          <div
+            key={part.key}
+            className={part.color}
+            // A sliver still shows: a few pixels at least.
+            style={{ flexGrow: part.bytes, flexBasis: 0, minWidth: 3 }}
+          />
+        ))}
+      </div>
+      <ul
+        aria-label={t('drives.usage.label', { name })}
+        className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground tabular-nums"
+      >
+        {parts.map((part) => (
+          <li key={part.key} className="flex items-center gap-1.5">
+            <span className={cn('size-2 shrink-0 rounded-full', part.color)} />
+            {part.label}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }

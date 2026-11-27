@@ -5,6 +5,9 @@ import { afterEach } from 'vitest'
 
 import '@/i18n'
 
+// jsdom doesn't lay pages out, so it has no scrolling.
+Element.prototype.scrollIntoView = () => {}
+
 afterEach(() => {
   cleanup()
 })

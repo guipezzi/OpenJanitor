@@ -34,7 +34,7 @@ pub use quarantine::{
     Conflicts, ItemRef, NextExpiry, QuarantineKeeper, QuarantineReport, QuarantineSummary,
     QuarantineView, UnreadableBatch, restore_conflicts,
 };
-pub use results::{ChildPage, NodeId, NodeKind, NodeView, ScanResults};
+pub use results::{ChildPage, DriveTally, NodeId, NodeKind, NodeView, ScanResults};
 pub use rule::{App, CompiledRule, Level, RECYCLE_BIN, Risk, Rule, RuleError, RuleSet};
 pub use running::RunningPrograms;
 pub use scan::{

@@ -1,10 +1,11 @@
 import { BrushCleaning, ListChecks, Shield, ShieldAlert, TriangleAlert } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CleanDialog } from '@/components/clean-dialog'
 import { DetailsPanel } from '@/components/details-panel'
 import { ResultsTree } from '@/components/results-tree'
+import { ScanSummary } from '@/components/scan-summary'
 import { Button } from '@/components/ui/button'
 import { planClean, type CleanPlan } from '@/lib/clean'
 import { formatBytes } from '@/lib/format'
@@ -47,6 +48,7 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
   const [plan, setPlan] = useState<CleanPlan | null>(null)
   const [planning, setPlanning] = useState(false)
   const [planError, setPlanError] = useState<string | null>(null)
+  const treeArea = useRef<HTMLDivElement>(null)
 
   // The focused item may be gone once the results change.
   const [shown, setShown] = useState(overview)
@@ -78,6 +80,17 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
   const notChecked = empty.filter(couldNotRead).map((rule) => rule.name)
   const nothingFound = empty.filter((rule) => !couldNotRead(rule)).map((rule) => rule.name)
 
+  // A category picked in the chart: show its details and take the keyboard
+  // to its row in the tree.
+  function pickCategory(id: number) {
+    const category = overview.categories.find((node) => node.id === id)
+    if (!category) return
+    setFocused(category)
+    const row = treeArea.current?.querySelector<HTMLElement>(`[data-node-id="${id}"] [data-row-name]`)
+    row?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    row?.focus({ preventScroll: true })
+  }
+
   async function protect(node: NodeView) {
     setNotice(null)
     setProtectError(null)
@@ -108,6 +121,8 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
 
   return (
     <div className="flex flex-1 flex-col space-y-4">
+      <ScanSummary overview={overview} onPickCategory={pickCategory} />
+
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <Button variant="outline" onClick={() => setChoices(recommended(overview.categories))}>
           <ListChecks />
@@ -132,7 +147,7 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
         </p>
       )}
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div ref={treeArea} className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
         <ResultsTree
           rows={tree.rows}
           expanded={tree.expanded}
