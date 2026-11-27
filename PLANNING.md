@@ -69,6 +69,7 @@ Commercial cleaners usually lock their most useful features behind a paywall. Op
 | D31 | Settings         | Settings can only make cleaning more careful than the defaults: the minimum age never shortens a rule's own wait, and quarantine retention starts at 7 days (medium) and 30 days (review). A damaged `settings.json` stops scans and cleanups until it's fixed or reset; it never falls back to defaults silently. Changes save as soon as they're made ([§7.4](#74-other-screens)) |
 | D32 | Recycle Bin      | Emptied as a whole per drive through the shell API, like File Explorer, so the minimum age doesn't apply; instead it's never preselected, and its details offer *Open the Recycle Bin*. If its item count or size changed since the scan, it's left alone (D26). With "Always use the quarantine" on, it's left out of the plan, since it can't be quarantined. System drive only until drive selection (D15) ([§6.1](#61-simple-clean-phase-1)) |
 | D33 | Drive selection  | Scans only enter locations on the selected drives (rules whose locations are all elsewhere are listed as not scanned) and read the Recycle Bin of each. The choice is saved in `settings.json` (format 2) by volume ID, so an external drive keeps it under another letter; drives that aren't connected keep their choice, and *Restore defaults* goes back to the system drive. At least one drive is always selected: the system drive when none of the chosen ones is connected. Changing the choice clears the results, and a cleanup refuses results scanned with another choice. Internal and external (USB) drives can be selected; network, optical, and unreadable drives can't ([§7.9](#79-drive-selection)) |
+| D34 | Elevated helper  | A cleanup's admin-only files go to `openjanitor-helper.exe`, started with one UAC prompt right after the confirmation. It talks to the app over a private named pipe (each side checks which process is on the other end) and re-checks every file itself against OpenJanitor's own rules, which may only look in machine-wide folders. A "no" to the prompt, or a helper that fails, leaves those files alone and cleans the rest. It also works when another account's administrator approves the prompt. Admin-only files the policy would quarantine stay left out: the system quarantine moves to phase 2. Scanning with admin rights ("Check with admin rights", a second prompt) is PR 11b ([§4.6](#46-privilege-model)) |
 
 ## 4. Safety model
 
@@ -158,6 +159,13 @@ Settings can lengthen the retention (medium: 7, 14, or 30 days; review: 30, 60, 
 - `openjanitor-helper.exe` is a small, separate binary, started **on demand** with a UAC prompt, and only when the selection includes admin-only items. That's one prompt per cleanup, not one per file.
 - The app is installed per machine, in Program Files (D18). A helper that lives in a folder the user can write to could be swapped by any program running as that user, and the next UAC prompt would elevate the swapped file.
 - The helper **revalidates everything itself** (deny list, rules, [§4.4](#44-revalidation-before-acting)) and never trusts paths sent by the UI. Its IPC API is narrow: act on these findings from this rule set, create a restore point, run built-in action X.
+- **How phase 1 does it (D34):**
+  - The helper creates a named pipe with a random name the app gave it: one instance, local clients only. It refuses to start if that name already exists, and it only runs elevated.
+  - The app connects only if the pipe's server is the very process it started. The helper serves only the process that started it, and only if that process is OpenJanitor from the helper's own folder.
+  - The app sends one request: the plan's admin-only files as the scan saw them, the mode (dry run wins on either side), the user's minimum age, and their Protected list (both can only make it more careful).
+  - For each file, the helper checks that its rule is one of OpenJanitor's bundled admin rules and only uses machine-wide folders (`%WINDIR%`, `%PROGRAMDATA%`, ...). The file must lie inside that rule's location as the helper itself expands it, match the rule's patterns, be old enough, and not be protected. Then `oj-safety` checks it's still the same file before deleting it. A forged request can only clean what the rules would find.
+  - The helper answers with one JSON line per file, plus each folder it removed, and the app writes everything to the history. It exits when done, or after a minute if the app never connects.
+  - The bundled installer (PR 12) places it next to the app in Program Files.
 - Why not "always run as admin":
   - A standard user who types an administrator's credentials runs the app as *that* account. `%TEMP%`, `AppData`, and browser caches then point to the wrong profile.
   - The UI is a webview. With admin rights, any UI bug becomes a system-level bug.
@@ -532,12 +540,15 @@ Small PRs in four blocks. Each one leaves the app working. The Clean button only
 10. **Drives and charts**, in two parts:
    - **10a. Drives** ([§7.9](#79-drive-selection), D33): detection (internal or external, SSD or hard disk), the selector on the Clean screen, scans limited to the selected drives, and the Recycle Bin of each.
    - **10b. Charts** ([§7.8](#78-disk-usage-visualization)): a segmented bar per selected drive (cleanable space found, other used space, free), drawn in HTML, and a donut of cleanable space by category (at most 6 plus "Other", with a legend) drawn with ECharts, whose slices select their category in the tree.
-11. **Elevated helper v1** ([§4.6](#46-privilege-model)) for admin-only items such as Windows temp files, with one UAC prompt per cleanup.
-12. **Installer and release.** Per-machine NSIS installer, a GitHub Actions workflow that builds it for each version tag, and an end-to-end test in Windows Sandbox as a first-time user, including a real (not dry-run) cleanup that empties the Recycle Bin. The installer credits the bundled libraries, including ECharts' Apache-2.0 NOTICE. Then the pt-BR translation and v0.1.0.
+11. **Elevated helper v1** ([§4.6](#46-privilege-model), D34), in two parts:
+   - **11a. Cleaning with admin rights:** the helper, its private pipe and checks, and one UAC prompt per cleanup for the admin-only files the scan found.
+   - **11b. Scanning with admin rights:** a "Check with admin rights" button where the scan couldn't look everywhere. The helper scans the admin rules, and the files show up in the tree for review before cleaning (a second prompt when cleaning them).
+12. **Installer and release.** Per-machine NSIS installer, a GitHub Actions workflow that builds it for each version tag, and an end-to-end test in Windows Sandbox as a first-time user, including a real (not dry-run) cleanup that empties the Recycle Bin. The installer credits the bundled libraries, including ECharts' Apache-2.0 NOTICE, and ships `openjanitor-helper.exe` next to the app. Until the builds are signed, the UAC prompt names an unknown publisher. Then the pt-BR translation and v0.1.0.
 
 ### Phase 2 — Advanced clean
 
 - Restore points and their popups ([§4.7](#47-system-restore-points))
+- The system quarantine (`%PROGRAMDATA%\OpenJanitor\Quarantine`, D22): locked-down permissions, restoring and deleting through the helper, and purging expired items (D25). Until then, admin-only files that would go to quarantine are left out (D34)
 - Leftover detection, `Windows.old`, Windows Update cache, DISM, Installer orphans, developer caches, Downloads installers ([§6.2](#62-advanced-clean-phase-2))
 - Advanced mode
 

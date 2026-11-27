@@ -25,8 +25,13 @@ export function CleanProgressPanel({ progress, mode, stopping, onStop }: CleanPr
       {mode === 'dry_run' && <TestModeNote>{t('clean.testMode')}</TestModeNote>}
       <div className="flex items-center gap-4">
         <div className="min-w-0 flex-1 space-y-1" aria-live="polite">
-          <p className="text-sm font-medium">{t('clean.running')}</p>
-          {progress && (
+          <p className="text-sm font-medium">
+            {progress?.admin_prompt ? t('clean.adminWaiting') : t('clean.running')}
+          </p>
+          {progress?.admin_prompt && (
+            <p className="text-xs text-muted-foreground">{t('clean.adminWaitingHint')}</p>
+          )}
+          {progress && !progress.admin_prompt && (
             <p className="text-xs text-muted-foreground tabular-nums">
               {t('clean.progress', { done: progress.done, total: progress.total })}
             </p>

@@ -40,8 +40,9 @@ impl Mode {
     }
 }
 
-/// What happened to one file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// What happened to one file. It reads back from JSON too, because the
+/// elevated helper reports its outcomes to the app that way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Outcome {
     Deleted {
@@ -69,7 +70,7 @@ pub enum Outcome {
 }
 
 /// Why a file or folder was left alone.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum SkipReason {
     /// The deny list refused it.
@@ -102,6 +103,12 @@ pub enum SkipReason {
     /// The app the file belongs to is running. The cleanup decides this
     /// before asking the executor, which never sees the file.
     AppRunning,
+    /// It needs administrator rights, and the user said no to Windows'
+    /// prompt (or the helper couldn't start).
+    AdminDeclined,
+    /// The elevated helper found it isn't something its rule cleans: not
+    /// in the rule's locations, not matching its patterns, or too new.
+    OutsideRule,
     Failed(String),
 }
 
@@ -122,6 +129,8 @@ impl SkipReason {
             SkipReason::NotEmpty => "not_empty",
             SkipReason::OutsideLocation => "outside_location",
             SkipReason::AppRunning => "app_running",
+            SkipReason::AdminDeclined => "admin_declined",
+            SkipReason::OutsideRule => "outside_rule",
             SkipReason::Failed(_) => "failed",
         }
     }
@@ -362,11 +371,22 @@ mod tests {
             SkipReason::NotEmpty,
             SkipReason::OutsideLocation,
             SkipReason::AppRunning,
+            SkipReason::AdminDeclined,
+            SkipReason::OutsideRule,
             SkipReason::Failed("boom".into()),
         ];
         for reason in reasons {
             let json = serde_json::to_value(&reason).unwrap();
             assert_eq!(json["kind"], reason.key(), "{reason:?}");
+            let back: SkipReason = serde_json::from_value(json).unwrap();
+            assert_eq!(back, reason, "reads back the same");
         }
+        let outcome = Outcome::Skipped {
+            reason: SkipReason::Denied(DenyReason::InvalidPath(crate::path::PathError::ShortName(
+                "PROGRA~1".into(),
+            ))),
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert_eq!(serde_json::from_str::<Outcome>(&json).unwrap(), outcome);
     }
 }

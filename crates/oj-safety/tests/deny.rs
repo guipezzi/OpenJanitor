@@ -27,7 +27,7 @@ fn assert_allowed(list: &DenyList, path: &str) {
 fn assert_tree(list: &DenyList, path: &str, label: &'static str) {
     assert_eq!(
         reason(list, path),
-        DenyReason::ProtectedTree(label),
+        DenyReason::ProtectedTree(label.into()),
         "{path}"
     );
 }

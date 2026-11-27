@@ -9,6 +9,7 @@
 pub mod age;
 pub mod clean;
 pub mod drives;
+pub mod elevated;
 pub mod history;
 pub mod history_view;
 pub mod quarantine;
@@ -24,6 +25,10 @@ pub use clean::{
     Policy, QuarantineGroup, QuarantinedGroup, SkipCount, Tally,
 };
 pub use drives::{Connection, Drive, DriveStatus, Media};
+pub use elevated::{
+    AppMessage, Checker, ElevatedError, ElevatedItem, ElevatedRequest, Elevator, HelperMessage,
+    PROTOCOL_VERSION,
+};
 pub use history::{History, QuarantineAction};
 pub use history_view::{
     DETAIL_DAYS, EntryKind, HistoryEntry, HistoryFile, HistoryFilePage, HistoryTotals, HistoryView,

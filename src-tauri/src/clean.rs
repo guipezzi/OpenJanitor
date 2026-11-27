@@ -14,6 +14,7 @@ use oj_safety::{DenyList, Executor, Mode, Store, SystemPaths, WindowsRecycleBin}
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
+use crate::helper::Helper;
 use crate::state::{AppState, PlanInputs, PlanView};
 
 /// Progress goes to the UI at most this often.
@@ -95,9 +96,13 @@ fn clean(
     let system = SystemPaths::discover().map_err(|e| format!("{e}. {unchanged}"))?;
     let deny = DenyList::new(&system).map_err(|e| format!("{e}. {unchanged}"))?;
     let protected = crate::protected::load(&system.protected_list_path())?;
+    let settings = crate::settings::load_for("cleaned")?;
     let mut history = History::open(&system.history_path())
         .map_err(|e| format!("Couldn't open the history file: {e}. {unchanged}"))?;
     let running = running_programs().map_err(|e| format!("{e}. {unchanged}"))?;
+    // Files that need administrator rights go to the elevated helper.
+    let mut helper = Helper::new(Mode::from_env(), &settings, &protected)
+        .map_err(|e| format!("{e}. {unchanged}"))?;
     let executor = Executor::new(Mode::from_env(), &deny)
         .with_protected_list(protected)
         .with_recycle_bin(&WindowsRecycleBin);
@@ -106,13 +111,17 @@ fn clean(
     let state = app.state::<AppState>();
     let (results, plan, cancel) = state.begin_clean(plan_id)?;
     let mut last_sent: Option<Instant> = None;
+    let mut prompting = false;
     let mut on_progress = |progress: &CleanProgress| {
+        // Waiting for the UAC prompt, and the end of that wait, always show.
         let due = progress.done == progress.total
+            || progress.admin_prompt != prompting
             || last_sent.is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL);
         if due {
             // Progress is best effort: a closed window just stops listening.
             let _ = channel.send(progress.clone());
             last_sent = Some(Instant::now());
+            prompting = progress.admin_prompt;
         }
     };
     let report = Cleaner {
@@ -120,6 +129,7 @@ fn clean(
         store: &store,
         history: &mut history,
         running: &running,
+        elevator: Some(&mut helper),
     }
     .run(
         &results,

@@ -38,11 +38,13 @@ export interface CleanPlan {
   mode: Mode
   /** Files deleted for good. */
   delete: Tally
+  /** Files deleted for good by the elevated helper, after one UAC prompt. */
+  elevated: Tally
   /** Recycle Bins emptied for good, each as a whole. */
   recycle_bins: BinTally[]
   /** Moved to quarantine, shortest stay first. */
   quarantine: QuarantineGroup[]
-  /** Selected, but left out: they need administrator rights. */
+  /** Selected, but left out: they need administrator rights and would go to quarantine. */
   needs_admin: Tally
   /** Selected, but left out: their app is open. Biggest first. */
   apps_open: OpenApp[]
@@ -60,6 +62,8 @@ export interface CleanProgress {
   total: number
   /** Space freed so far. */
   freed: number
+  /** Waiting for the user to answer Windows' administrator prompt. */
+  admin_prompt: boolean
 }
 
 export type SkipReason =
@@ -76,6 +80,8 @@ export type SkipReason =
   | 'not_empty'
   | 'outside_location'
   | 'app_running'
+  | 'admin_declined'
+  | 'outside_rule'
   | 'failed'
 
 /** What a cleanup did (oj_core::CleanReport). */
@@ -106,7 +112,10 @@ export interface CleanReport {
 
 /** Whether the plan acts on anything: files, or a Recycle Bin. */
 export function plansAnything(plan: CleanPlan): boolean {
-  const files = plan.delete.files + plan.quarantine.reduce((sum, group) => sum + group.files, 0)
+  const files =
+    plan.delete.files +
+    plan.elevated.files +
+    plan.quarantine.reduce((sum, group) => sum + group.files, 0)
   return files > 0 || plan.recycle_bins.length > 0
 }
 

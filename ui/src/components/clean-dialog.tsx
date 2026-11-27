@@ -3,6 +3,7 @@ import {
   Archive,
   Clock,
   ShieldAlert,
+  ShieldCheck,
   Trash,
   Trash2,
   TrashOff,
@@ -64,7 +65,9 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
   const locale = i18n.language
   const [understood, setUnderstood] = useState(false)
   const [now] = useState(() => Date.now() / 1000)
-  const deletingFiles = plan.delete.files > 0
+  // Files deleted for good, by the app and by the elevated helper.
+  const deletedFiles = plan.delete.files + plan.elevated.files
+  const deletingFiles = deletedFiles > 0
   const emptying = plan.recycle_bins.length > 0
   const deleting = deletingFiles || emptying
   const quarantining = plan.quarantine.length > 0
@@ -81,12 +84,12 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
   const understand =
     deletingFiles && emptying
       ? t('clean.understandBoth', {
-          files: t('clean.fileCount', { count: plan.delete.files }),
+          files: t('clean.fileCount', { count: deletedFiles }),
           items: t('clean.itemCount', { count: items }),
         })
       : emptying
         ? t('clean.understandBin', { count: items })
-        : t('clean.understand', { count: plan.delete.files })
+        : t('clean.understand', { count: deletedFiles })
 
   return (
     <AlertDialogContent>
@@ -132,12 +135,21 @@ function Review({ plan, onConfirm, onScanAgain, onRecheck, rechecking }: ReviewP
       )}
 
       <ul className="space-y-3">
-        {deletingFiles && (
+        {plan.delete.files > 0 && (
           <Group
             icon={Trash}
             title={t('clean.deleteTitle')}
             detail={tally(plan.delete)}
             hint={t('clean.deleteHint')}
+            iconClass="text-destructive"
+          />
+        )}
+        {plan.elevated.files > 0 && (
+          <Group
+            icon={ShieldCheck}
+            title={t('clean.elevatedTitle')}
+            detail={tally(plan.elevated)}
+            hint={t('clean.elevatedHint')}
             iconClass="text-destructive"
           />
         )}

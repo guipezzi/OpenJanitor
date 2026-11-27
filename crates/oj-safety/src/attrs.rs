@@ -2,7 +2,7 @@
 
 use std::fs::Metadata;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
 pub const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
@@ -14,7 +14,7 @@ const CLOUD_BITS: u32 =
     FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS;
 
 /// What an entry is, as far as cleaning is concerned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryClass {
     File,

@@ -207,6 +207,7 @@ const plan: CleanPlan = {
   plan_id: 7,
   mode: 'live',
   delete: { files: 1100, size: 200_000_000 },
+  elevated: { files: 0, size: 0 },
   quarantine: [{ days: 7, files: 10, size: 1_048_576 }],
   needs_admin: { files: 47, size: 8_037_478 },
   apps_open: [],
@@ -337,7 +338,9 @@ describe('App', () => {
     expect(within(summary).getByText('In use by another program: 3')).toBeInTheDocument()
     expect(within(summary).getByText(/Close the programs using them/)).toBeInTheDocument()
     expect(
-      within(summary).getByText('47 files that need administrator rights were left out.'),
+      within(summary).getByText(
+        '47 files that need administrator rights were left out, because they would go to quarantine.',
+      ),
     ).toBeInTheDocument()
     expect(screen.queryByRole('tree')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scan again' })).toBeEnabled()
@@ -365,6 +368,41 @@ describe('App', () => {
       within(summary).getByText('Emptied the Recycle Bin on drive C: (42 items, 1.4 GB).'),
     ).toBeInTheDocument()
     expect(within(summary).getByText('1,097 files deleted permanently')).toBeInTheDocument()
+  })
+
+  it('deletes Windows files with administrator permission, after one prompt', async () => {
+    const dialog = await reviewing({
+      ...plan,
+      quarantine: [],
+      elevated: { files: 47, size: 8_037_478 },
+      needs_admin: { files: 0, size: 0 },
+    })
+    expect(within(dialog).getByText('Deleted with administrator permission')).toBeInTheDocument()
+    expect(within(dialog).getByText('· 47 files · 7.7 MB')).toBeInTheDocument()
+    expect(within(dialog).getByText(/Windows asks for permission once/)).toBeInTheDocument()
+    expect(within(dialog).queryByText('Left out')).not.toBeInTheDocument()
+
+    let finish: (report: CleanReport) => void = () => {}
+    vi.mocked(runClean).mockImplementation((_planId, onProgress: (p: CleanProgress) => void) => {
+      onProgress({ done: 0, total: 1147, freed: 0, admin_prompt: true })
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    fireEvent.click(
+      within(dialog).getByRole('checkbox', {
+        name: 'I understand that 1,147 files will be permanently deleted.',
+      }),
+    )
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete permanently' }))
+    expect(await screen.findByText('Waiting for administrator permission…')).toBeInTheDocument()
+    expect(screen.getByText(/If you say no, they're left alone/)).toBeInTheDocument()
+
+    await act(async () =>
+      finish({ ...cleaned, quarantined: [], skipped: [{ reason: 'admin_declined', files: 47 }] }),
+    )
+    const summary = screen.getByRole('region', { name: 'Cleanup finished' })
+    expect(within(summary).getByText('Administrator permission was declined: 47')).toBeInTheDocument()
   })
 
   it('can empty just the Recycle Bin, and says when it was left alone', async () => {
@@ -561,7 +599,7 @@ describe('App', () => {
   it('shows progress while cleaning and can stop', async () => {
     let finish: (report: CleanReport) => void = () => {}
     vi.mocked(runClean).mockImplementation((_planId, onProgress: (p: CleanProgress) => void) => {
-      onProgress({ done: 1, total: 3, freed: 1_048_576 })
+      onProgress({ done: 1, total: 3, freed: 1_048_576, admin_prompt: false })
       return new Promise((resolve) => {
         finish = resolve
       })

@@ -13,7 +13,10 @@ tauri-build = { version = "2.7.6", features = [] }
 [dependencies]
 oj-core = { path = "../crates/oj-core" }
 oj-safety = { path = "../crates/oj-safety" }
+# Starts the elevated helper and talks to it over a private pipe.
+oj-windows = { path = "../crates/oj-windows" }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 tauri = { version = "2.12.7", features = [] }
 # Native open/save dialogs, used from Rust only (importing and exporting the
 # Protected list). Not Tauri's dialog plugin: it depends on Tauri's file

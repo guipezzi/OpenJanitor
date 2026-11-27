@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use oj_safety::{Batch, CancelToken, Executor, Mode, Outcome, SkipReason, Store};
 use serde::{Deserialize, Serialize};
 
+use crate::elevated::{ElevatedError, ElevatedItem, Elevator, HelperMessage};
 use crate::history::History;
 use crate::results::{NodeId, ScanResults};
 use crate::rule::Risk;
@@ -123,8 +124,11 @@ pub struct PlanSummary {
     pub recycle_bins: Vec<BinTally>,
     /// Moved to quarantine, shortest stay first.
     pub quarantine: Vec<QuarantineGroup>,
-    /// Selected, but left out: cleaning them needs administrator rights,
-    /// which arrive with the elevated helper.
+    /// Files deleted for good by the elevated helper, after one UAC prompt
+    /// (D34).
+    pub elevated: Tally,
+    /// Selected, but left out: they need administrator rights and would go
+    /// to quarantine, and the quarantine for system files comes later.
     pub needs_admin: Tally,
     /// Selected, but left out: their app is open (PLANNING.md §6.1).
     /// Biggest first.
@@ -137,7 +141,9 @@ pub struct PlanSummary {
 impl PlanSummary {
     /// Files the plan will act on, not counting Recycle Bins.
     pub fn files(&self) -> u64 {
-        self.delete.files + self.quarantine.iter().map(|g| g.files).sum::<u64>()
+        self.delete.files
+            + self.elevated.files
+            + self.quarantine.iter().map(|g| g.files).sum::<u64>()
     }
 }
 
@@ -148,13 +154,16 @@ pub struct Plan {
     results: u64,
     /// Indices into the results' findings, in tree order.
     items: Vec<(usize, Action)>,
+    /// Findings the elevated helper deletes, in tree order.
+    elevated: Vec<usize>,
     summary: PlanSummary,
 }
 
 impl Plan {
     /// The plan for a selection (see [`ScanResults::selected`]). Files that
-    /// need administrator rights, and files of apps that are `running`, are
-    /// left out and only counted.
+    /// need administrator rights go to the elevated helper when the policy
+    /// deletes them, and are left out (and counted) when it would
+    /// quarantine them. Files of apps that are `running` are left out too.
     pub fn build(
         results: &ScanResults,
         choices: &HashMap<NodeId, bool>,
@@ -164,13 +173,20 @@ impl Plan {
         let findings = &results.report().findings;
         let open = open_apps(results, running);
         let mut items = Vec::new();
+        let mut elevated = Vec::new();
         let mut summary = PlanSummary::default();
         let mut groups: BTreeMap<u32, Tally> = BTreeMap::new();
         let mut apps: BTreeMap<&str, Tally> = BTreeMap::new();
         for index in results.selected(choices) {
             let finding = &findings[index];
             if finding.needs_admin {
-                summary.needs_admin.add(finding.size_on_disk);
+                let file = matches!(finding.target, Target::File(_));
+                if file && policy.action(finding.risk) == Action::Delete {
+                    summary.elevated.add(finding.size_on_disk);
+                    elevated.push(index);
+                } else {
+                    summary.needs_admin.add(finding.size_on_disk);
+                }
                 continue;
             }
             if let Some(&app) = open.get(finding.rule_id.as_str()) {
@@ -223,6 +239,7 @@ impl Plan {
         Self {
             results: results.id(),
             items,
+            elevated,
             summary,
         }
     }
@@ -231,13 +248,13 @@ impl Plan {
         &self.summary
     }
 
-    /// Files the plan will act on.
+    /// Files (and Recycle Bins) the plan will act on.
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.items.len() + self.elevated.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.len() == 0
     }
 }
 
@@ -249,6 +266,8 @@ pub struct CleanProgress {
     pub total: u64,
     /// Space freed so far, Recycle Bins included.
     pub freed: u64,
+    /// Waiting for the user to answer Windows' administrator prompt.
+    pub admin_prompt: bool,
 }
 
 /// Files now in quarantine for the same number of days.
@@ -315,11 +334,16 @@ pub struct Cleaner<'a> {
     /// What's running as the cleanup starts. Files of an app opened since
     /// the plan was made are skipped.
     pub running: &'a RunningPrograms,
+    /// Deletes the files that need administrator rights. Without one, they
+    /// are left alone.
+    pub elevator: Option<&'a mut dyn Elevator>,
 }
 
 impl Cleaner<'_> {
     /// Runs `plan`, file by file, then removes the folders it left empty.
-    /// Once `cancel` is cancelled, it stops before the next file.
+    /// The files that need administrator rights go first, so Windows asks
+    /// for permission right after the confirmation (D34). Once `cancel` is
+    /// cancelled, it stops before the next file.
     ///
     /// # Panics
     ///
@@ -351,8 +375,97 @@ impl Cleaner<'_> {
         // Folders that held a removed file, with the rule location above them.
         let mut emptied: HashMap<PathBuf, &Path> = HashMap::new();
 
-        let total = plan.items.len() as u64;
+        let total = plan.len() as u64;
         let mut done = 0;
+        let mut folders_removed = 0;
+
+        if !plan.elevated.is_empty() && !cancel.is_cancelled() {
+            let elevated: Vec<&Finding> = plan.elevated.iter().map(|&i| &findings[i]).collect();
+            let items: Vec<ElevatedItem> = elevated
+                .iter()
+                .filter_map(|finding| ElevatedItem::from_finding(finding))
+                .collect();
+            on_progress(&CleanProgress {
+                done,
+                total,
+                freed,
+                admin_prompt: true,
+            });
+            let mut answered = vec![false; elevated.len()];
+            let mut refused = None;
+            let history = &mut *self.history;
+            let mut on_message = |message: HelperMessage| match message {
+                HelperMessage::Outcome { index, outcome } => {
+                    // Anything the helper says about other items is ignored.
+                    let Some(&finding) = elevated.get(index) else {
+                        return;
+                    };
+                    if std::mem::replace(&mut answered[index], true) {
+                        return;
+                    }
+                    match &outcome {
+                        Outcome::Deleted { freed: size } | Outcome::WouldDelete { freed: size } => {
+                            freed += size;
+                            deleted.files += 1;
+                            deleted.size += size;
+                        }
+                        Outcome::Skipped { reason } => {
+                            *skipped.entry(reason.key()).or_default() += 1
+                        }
+                        _ => {}
+                    }
+                    history.file_action(cleanup, mode, finding, Action::Delete, &outcome);
+                    done += 1;
+                    on_progress(&CleanProgress {
+                        done,
+                        total,
+                        freed,
+                        admin_prompt: false,
+                    });
+                }
+                HelperMessage::FolderRemoved { path } => {
+                    folders_removed += 1;
+                    history.folder_removed(cleanup, mode, &path);
+                }
+                HelperMessage::Refused { message } => refused = Some(message),
+                HelperMessage::Done => {}
+            };
+            let result = match self.elevator.as_deref_mut() {
+                Some(elevator) => elevator.run(&items, cancel, &mut on_message),
+                None => Err(ElevatedError::Failed(
+                    "this cleanup can't ask for administrator rights".into(),
+                )),
+            };
+            let reason = match (result, refused) {
+                (Err(ElevatedError::Declined), _) => Some(SkipReason::AdminDeclined),
+                (Err(ElevatedError::Failed(message)), _) | (Ok(()), Some(message)) => {
+                    Some(SkipReason::Failed(message))
+                }
+                // Unanswered after a clean finish: stopped by the user.
+                (Ok(()), None) => None,
+            };
+            if let Some(reason) = reason {
+                for (index, &finding) in elevated.iter().enumerate() {
+                    if answered[index] {
+                        continue;
+                    }
+                    let outcome = Outcome::Skipped {
+                        reason: reason.clone(),
+                    };
+                    *skipped.entry(reason.key()).or_default() += 1;
+                    self.history
+                        .file_action(cleanup, mode, finding, Action::Delete, &outcome);
+                    done += 1;
+                }
+                on_progress(&CleanProgress {
+                    done,
+                    total,
+                    freed,
+                    admin_prompt: false,
+                });
+            }
+        }
+
         for &(index, action) in &plan.items {
             if cancel.is_cancelled() {
                 break;
@@ -413,10 +526,18 @@ impl Cleaner<'_> {
             self.history
                 .file_action(cleanup, mode, finding, action, &outcome);
             done += 1;
-            on_progress(&CleanProgress { done, total, freed });
+            on_progress(&CleanProgress {
+                done,
+                total,
+                freed,
+                admin_prompt: false,
+            });
         }
 
-        let folders_removed = self.remove_emptied(emptied, cleanup, mode);
+        let history = &mut *self.history;
+        folders_removed += remove_empty_folders(self.executor, emptied, &mut |folder| {
+            history.folder_removed(cleanup, mode, folder);
+        });
         let mut skipped: Vec<SkipCount> = skipped
             .into_iter()
             .map(|(reason, files)| SkipCount { reason, files })
@@ -483,31 +604,31 @@ impl Cleaner<'_> {
             },
         }
     }
+}
 
-    /// Removes the emptied folders, deepest first, so a folder whose only
-    /// content was emptied folders goes too. Returns how many went.
-    fn remove_emptied(
-        &mut self,
-        emptied: HashMap<PathBuf, &Path>,
-        cleanup: u64,
-        mode: Mode,
-    ) -> u64 {
-        let mut folders: Vec<(PathBuf, &Path)> = emptied.into_iter().collect();
-        folders.sort_by(|(a, _), (b, _)| {
-            b.components()
-                .count()
-                .cmp(&a.components().count())
-                .then_with(|| a.cmp(b))
-        });
-        let mut removed = 0;
-        for (folder, location) in folders {
-            if let Outcome::Deleted { .. } = self.executor.remove_empty_folder(&folder, location) {
-                removed += 1;
-                self.history.folder_removed(cleanup, mode, &folder);
-            }
+/// Removes the emptied folders, deepest first, so a folder whose only
+/// content was emptied folders goes too. Calls `on_removed` for each, and
+/// returns how many went.
+pub(crate) fn remove_empty_folders(
+    executor: &Executor,
+    emptied: HashMap<PathBuf, &Path>,
+    on_removed: &mut dyn FnMut(&Path),
+) -> u64 {
+    let mut folders: Vec<(PathBuf, &Path)> = emptied.into_iter().collect();
+    folders.sort_by(|(a, _), (b, _)| {
+        b.components()
+            .count()
+            .cmp(&a.components().count())
+            .then_with(|| a.cmp(b))
+    });
+    let mut removed = 0;
+    for (folder, location) in folders {
+        if let Outcome::Deleted { .. } = executor.remove_empty_folder(&folder, location) {
+            removed += 1;
+            on_removed(&folder);
         }
-        removed
     }
+    removed
 }
 
 /// The rules whose app is running, with the app's name.
@@ -525,7 +646,11 @@ fn open_apps<'r>(results: &'r ScanResults, running: &RunningPrograms) -> HashMap
 
 /// Adds every folder between `file` and its rule location `root` (which
 /// itself is never removed).
-fn note_folders<'a>(emptied: &mut HashMap<PathBuf, &'a Path>, file: &Path, root: &'a Path) {
+pub(crate) fn note_folders<'a>(
+    emptied: &mut HashMap<PathBuf, &'a Path>,
+    file: &Path,
+    root: &'a Path,
+) {
     let mut folder = file.parent();
     while let Some(dir) = folder {
         if dir == root || !dir.starts_with(root) || emptied.contains_key(dir) {

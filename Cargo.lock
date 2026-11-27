@@ -2436,6 +2436,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oj-helper"
+version = "0.0.1"
+dependencies = [
+ "oj-core",
+ "oj-safety",
+ "oj-windows",
+ "serde_json",
+]
+
+[[package]]
 name = "oj-safety"
 version = "0.0.1"
 dependencies = [
@@ -2474,8 +2484,10 @@ version = "0.0.1"
 dependencies = [
  "oj-core",
  "oj-safety",
+ "oj-windows",
  "rfd",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
 ]
