@@ -46,6 +46,18 @@ pub enum ScanOutcome {
     Cancelled,
 }
 
+/// How "Check with admin rights" ended (D35).
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AdminScanOutcome {
+    /// New results, with the admin rules scanned in full.
+    Completed { overview: ScanOverview },
+    /// The user said no to the prompt; the results are unchanged.
+    Declined,
+    /// Stopped; the results are unchanged.
+    Cancelled,
+}
+
 /// What the confirmation shows: a cleanup plan in totals.
 #[derive(Debug, Serialize)]
 pub struct PlanView {
@@ -186,6 +198,55 @@ impl AppState {
             cancel: cancel.clone(),
         });
         Ok(cancel)
+    }
+
+    /// Starts "Check with admin rights" on the results of scan `scan_id`
+    /// (D35): returns their report and the token that cancels the check.
+    /// The results stay in place meanwhile. Fails if anything else runs.
+    pub fn begin_admin_scan(&self, scan_id: u64) -> Result<(ScanReport, CancelToken), String> {
+        let mut running = lock(&self.running);
+        if let Some(busy) = running.as_ref() {
+            return Err(busy_message(busy.operation));
+        }
+        let report = lock(&self.session)
+            .as_ref()
+            .filter(|session| session.id == scan_id)
+            .ok_or(OUT_OF_DATE)?
+            .results
+            .report()
+            .clone();
+        let cancel = CancelToken::new();
+        *running = Some(Running {
+            operation: Operation::Scan,
+            cancel: cancel.clone(),
+        });
+        Ok((report, cancel))
+    }
+
+    /// Ends "Check with admin rights". With a `merged` report, replaces the
+    /// results with it under a new scan id, keeping the original scan time
+    /// and drives, and hiding what `protected` covers; returns the new
+    /// overview. Call it exactly once after each
+    /// [`begin_admin_scan`](Self::begin_admin_scan).
+    pub fn finish_admin_scan(
+        &self,
+        scan_id: u64,
+        merged: Option<(ScanReport, ProtectedList)>,
+    ) -> Option<ScanOverview> {
+        let overview = merged.and_then(|(report, protected)| {
+            let mut session = lock(&self.session);
+            let session = session.as_mut().filter(|session| session.id == scan_id)?;
+            let id = self.last_scan_id.fetch_add(1, Ordering::Relaxed) + 1;
+            let mut results = ScanResults::new(report);
+            results.hide_protected(&protected);
+            let overview = overview(id, &results);
+            session.id = id;
+            session.results = results;
+            session.plan = None;
+            Some(overview)
+        });
+        self.finish(Operation::Scan);
+        overview
     }
 
     /// Asks the running scan, if any, to stop.
@@ -905,6 +966,55 @@ mod tests {
                 .history_files(second.view_id, 5, 0, 10)
                 .unwrap_err()
                 .contains("no entry 5")
+        );
+    }
+
+    #[test]
+    fn checking_with_admin_rights_replaces_the_results_but_not_their_age() {
+        let state = AppState::default();
+        state.begin_scan().unwrap();
+        let mut scanned = report(false);
+        scanned.drives = Some(vec!['C']);
+        let first = completed_id(state.finish_scan(Ok(scanned)));
+        let scanned_at = lock(&state.session).as_ref().unwrap().scanned_at;
+
+        assert!(
+            state
+                .begin_admin_scan(first + 1)
+                .unwrap_err()
+                .contains("out of date")
+        );
+        let (report, _cancel) = state.begin_admin_scan(first).unwrap();
+        assert!(
+            state
+                .begin_scan()
+                .unwrap_err()
+                .contains("scan is already running")
+        );
+
+        let overview = state
+            .finish_admin_scan(first, Some((report, ProtectedList::new())))
+            .unwrap();
+        assert_ne!(overview.scan_id, first, "new results, new id");
+        {
+            let session = lock(&state.session);
+            let session = session.as_ref().unwrap();
+            assert_eq!(session.scanned_at, scanned_at, "as old as the first scan");
+            assert_eq!(session.drives, Some(vec!['C']));
+        }
+        assert!(state.begin_scan().is_ok(), "the slot is free again");
+    }
+
+    #[test]
+    fn a_declined_admin_check_keeps_the_results() {
+        let state = AppState::default();
+        state.begin_scan().unwrap();
+        let id = completed_id(state.finish_scan(Ok(report(false))));
+        state.begin_admin_scan(id).unwrap();
+        assert!(state.finish_admin_scan(id, None).is_none());
+        assert!(
+            plan(&state, id, SystemTime::now()).is_ok(),
+            "the same results, same id"
         );
     }
 

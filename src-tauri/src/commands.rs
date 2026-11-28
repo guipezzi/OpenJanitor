@@ -6,15 +6,18 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use oj_core::elevated::merge_elevated;
 use oj_core::{
-    CancelToken, ChildPage, EnvVars, Level, NodeId, RuleSet, ScanOptions, ScanProgress, ScanReport,
-    Scanner,
+    CancelToken, ChildPage, ElevatedError, EnvVars, HelperMessage, Level, NodeId, RuleSet,
+    ScanOptions, ScanProgress, ScanReport, Scanner,
 };
 use oj_safety::{DenyList, SystemPaths, WindowsRecycleBin};
+use oj_safety::{Mode, ProtectedList};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
-use crate::state::{AppState, ScanOutcome};
+use crate::helper::Helper;
+use crate::state::{AdminScanOutcome, AppState, ScanOutcome};
 
 /// Progress goes to the UI at most this often, and whenever a rule starts.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -87,6 +90,89 @@ pub fn reveal_in_explorer(
         .spawn()
         .map_err(|e| format!("Couldn't open File Explorer: {e}"))?;
     Ok(())
+}
+
+/// "Check with admin rights" (D35): scans the admin rules of scan
+/// `scan_id`'s results again with administrator rights, through the
+/// helper (one UAC prompt), sending its progress on `on_progress`. On
+/// success the results are replaced, under a new scan id; a "no" to the
+/// prompt, or stopping, leaves them as they were. Only reads.
+#[tauri::command]
+pub async fn scan_with_admin(
+    app: AppHandle,
+    scan_id: u64,
+    on_progress: Channel<ScanProgress>,
+) -> Result<AdminScanOutcome, String> {
+    let (report, cancel) = app.state::<AppState>().begin_admin_scan(scan_id)?;
+    let worker = app.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let result = admin_scan(&report, &cancel, &on_progress);
+        let state = worker.state::<AppState>();
+        match result {
+            Ok(Some(merged)) => match state.finish_admin_scan(scan_id, Some(merged)) {
+                Some(overview) => Ok(AdminScanOutcome::Completed { overview }),
+                None => Err("These results are out of date. Scan again.".into()),
+            },
+            Ok(None) => {
+                state.finish_admin_scan(scan_id, None);
+                Ok(if cancel.is_cancelled() {
+                    AdminScanOutcome::Cancelled
+                } else {
+                    AdminScanOutcome::Declined
+                })
+            }
+            Err(error) => {
+                state.finish_admin_scan(scan_id, None);
+                Err(error)
+            }
+        }
+    })
+    .await;
+    joined.unwrap_or_else(|error| {
+        app.state::<AppState>().finish_admin_scan(scan_id, None);
+        Err(format!("The check stopped unexpectedly: {error}"))
+    })
+}
+
+/// Runs the helper's scan and merges what it found into `report`. `None`
+/// when the user declined the prompt or the check was stopped.
+fn admin_scan(
+    report: &ScanReport,
+    cancel: &CancelToken,
+    channel: &Channel<ScanProgress>,
+) -> Result<Option<(ScanReport, ProtectedList)>, String> {
+    let settings = crate::settings::load_for("checked")?;
+    let system = SystemPaths::discover().map_err(|e| e.to_string())?;
+    let protected = crate::protected::load(&system.protected_list_path())?;
+    // The drives these results cover, so the merge stays consistent.
+    let drives = match &report.drives {
+        Some(drives) => drives.clone(),
+        None => crate::drives::selected_letters(&settings)?,
+    };
+    let helper = Helper::new(Mode::from_env(), &settings, &protected)?;
+
+    let mut found = None;
+    let mut last_sent: Option<Instant> = None;
+    let result = helper.scan(report.level, drives, cancel, &mut |message| match message {
+        HelperMessage::ScanProgress { progress } => {
+            if last_sent.is_none_or(|at| at.elapsed() >= PROGRESS_INTERVAL) {
+                let _ = channel.send(progress);
+                last_sent = Some(Instant::now());
+            }
+        }
+        HelperMessage::Scanned { rules, files } => found = Some((rules, files)),
+        _ => {}
+    });
+    match result {
+        Err(ElevatedError::Declined) => Ok(None),
+        Err(ElevatedError::Failed(message)) => Err(message),
+        Ok(()) => match found {
+            Some((rules, files)) if !cancel.is_cancelled() => {
+                Ok(Some((merge_elevated(report, rules, files), protected)))
+            }
+            _ => Ok(None),
+        },
+    }
 }
 
 /// Opens the Recycle Bin in File Explorer, so the user can check it or

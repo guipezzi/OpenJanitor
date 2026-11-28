@@ -205,6 +205,18 @@ impl RuleSet {
         Ok(Self { rules })
     }
 
+    /// Only the rules `keep` says yes to.
+    pub fn filtered(&self, keep: impl Fn(&CompiledRule) -> bool) -> Self {
+        Self {
+            rules: self
+                .rules
+                .iter()
+                .filter(|rule| keep(rule))
+                .cloned()
+                .collect(),
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &CompiledRule> {
         self.rules.iter()
     }

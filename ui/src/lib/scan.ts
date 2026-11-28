@@ -177,6 +177,27 @@ export function scanChildren(
   return invoke<ChildPage>('scan_children', { scanId, nodeId, offset, limit })
 }
 
+/** How "Check with admin rights" ended (D35). */
+export type AdminScanOutcome =
+  /** New results under a new scan id; the selection starts over. */
+  | { status: 'completed'; overview: ScanOverview }
+  /** The user said no to Windows' prompt; the results are unchanged. */
+  | { status: 'declined' }
+  | { status: 'cancelled' }
+
+/**
+ * Scans the rules that need administrator rights again, through the elevated
+ * helper (one UAC prompt). Only reads. Stopped with cancelScan.
+ */
+export function scanWithAdmin(
+  scanId: number,
+  onProgress: (progress: ScanProgress) => void,
+): Promise<AdminScanOutcome> {
+  const channel = new Channel<ScanProgress>()
+  channel.onmessage = onProgress
+  return invoke<AdminScanOutcome>('scan_with_admin', { scanId, onProgress: channel })
+}
+
 /** Shows a location, folder, or file from the results in File Explorer. */
 export function revealInExplorer(scanId: number, nodeId: number): Promise<void> {
   return invoke('reveal_in_explorer', { scanId, nodeId })

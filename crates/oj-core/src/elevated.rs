@@ -12,25 +12,32 @@
 //!
 //! The helper answers with one [`HelperMessage`] per line; the app writes
 //! the history.
+//!
+//! It can also scan the admin rules with administrator rights ("Check
+//! with admin rights", D35): [`scan_elevated`] in the helper, and
+//! [`merge_elevated`] in the app to put what it found into the results.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oj_safety::{
-    CancelToken, Entry, Executor, FileSnapshot, NormPath, Outcome, ProtectedList, SkipReason,
+    CancelToken, DenyList, Entry, Executor, FileSnapshot, NormPath, Outcome, ProtectedList,
+    SkipReason, WindowsRecycleBin,
 };
 use oj_windows::FileId;
 use serde::{Deserialize, Serialize};
 
 use crate::age::DEFAULT_MIN_AGE;
 use crate::clean::{note_folders, remove_empty_folders};
-use crate::rule::{CompiledRule, RuleSet};
-use crate::scan::{Finding, Target, relative_path};
+use crate::rule::{CompiledRule, Level, RuleSet};
+use crate::scan::{
+    Finding, RuleReport, ScanOptions, ScanProgress, ScanReport, Scanner, Target, relative_path,
+};
 use crate::vars::{Vars, expand};
 
-/// The request format this version speaks, in [`ElevatedRequest::version`].
-pub const PROTOCOL_VERSION: u32 = 1;
+/// The request format this version speaks, in each request's `version`.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The only variables an elevated rule's locations may use: machine-wide
 /// folders. Never a user's profile, which may not even be the helper's.
@@ -86,6 +93,51 @@ impl ElevatedItem {
         let since = Duration::new(self.modified_secs, self.modified_nanos);
         UNIX_EPOCH.checked_add(since)
     }
+
+    /// The file as the scan saw it, if the item is well formed.
+    pub fn snapshot(&self) -> Option<FileSnapshot> {
+        Some(FileSnapshot {
+            path: self.path.clone(),
+            len: self.len,
+            allocated: self.allocated,
+            links: self.links,
+            modified: self.modified()?,
+            file_id: self.file_id.parse::<FileId>().ok()?,
+        })
+    }
+}
+
+/// What the app asks the helper, as the first line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HelperRequest {
+    /// Delete these files: a cleanup's admin-only part (D34).
+    Clean(ElevatedRequest),
+    /// Scan the admin rules with administrator rights (D35).
+    Scan(ScanRequest),
+}
+
+/// A scan of the admin rules, with administrator rights. Only reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanRequest {
+    pub version: u32,
+    pub level: Level,
+    /// The drive letters the results cover; locations elsewhere are left
+    /// alone.
+    pub drives: Vec<char>,
+    /// The user's minimum age in seconds (each rule uses the longer of this
+    /// and its own).
+    pub min_age_floor_secs: u64,
+    /// The user's Protected list.
+    pub protected: Vec<Entry>,
+}
+
+/// A file the helper's scan found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScannedFile {
+    pub item: ElevatedItem,
+    pub size_on_disk: u64,
+    pub evidence: Vec<String>,
 }
 
 /// Everything the helper is asked to do, sent as the first line.
@@ -118,6 +170,14 @@ pub enum HelperMessage {
     Outcome { index: usize, outcome: Outcome },
     /// A folder removed because the cleanup left it empty.
     FolderRemoved { path: PathBuf },
+    /// Where the helper's scan is.
+    ScanProgress { progress: ScanProgress },
+    /// What the helper's scan found: the admin rules' reports, and their
+    /// files. Not sent when the scan was stopped.
+    Scanned {
+        rules: Vec<RuleReport>,
+        files: Vec<ScannedFile>,
+    },
     /// Everything that could be done is done.
     Done,
     /// The request was refused as a whole, such as one from a newer app.
@@ -198,16 +258,9 @@ impl<'a> Checker<'a> {
             return Err(outside);
         }
 
-        let file_id: FileId = item.file_id.parse().map_err(|_| outside.clone())?;
-        Ok(FileSnapshot {
-            // Checked above to lie inside the location the helper found.
-            path: item.path.clone(),
-            len: item.len,
-            allocated: item.allocated,
-            links: item.links,
-            modified,
-            file_id,
-        })
+        // Its path was checked above to lie inside the location the helper
+        // found.
+        item.snapshot().ok_or(outside)
     }
 }
 
@@ -272,6 +325,147 @@ pub fn serve(
         });
     });
     send(HelperMessage::Done);
+}
+
+/// Runs a scan request: what the helper does for "Check with admin
+/// rights" (D35). Scans only the rules it may act for, with the same
+/// read-only scanner as the app, and reports what it found.
+pub fn scan_elevated(
+    request: &ScanRequest,
+    rules: &RuleSet,
+    vars: &dyn Vars,
+    deny: &DenyList,
+    cancel: &CancelToken,
+    send: &mut dyn FnMut(HelperMessage),
+) {
+    if request.version != PROTOCOL_VERSION {
+        send(HelperMessage::Refused {
+            message: format!(
+                "the app speaks version {} of the helper's language, not {PROTOCOL_VERSION}",
+                request.version
+            ),
+        });
+        return;
+    }
+    let protected = match ProtectedList::from_entries(request.protected.clone()) {
+        Ok(protected) => protected,
+        Err(e) => {
+            send(HelperMessage::Refused {
+                message: format!("the Protected list couldn't be read: {e}"),
+            });
+            return;
+        }
+    };
+    let admin = rules.filtered(elevated_rule);
+    // No admin rule is a builtin, so the Recycle Bin is never read here.
+    let scanner = Scanner {
+        rules: &admin,
+        vars,
+        deny,
+        protected: &protected,
+        recycle_bin: &WindowsRecycleBin,
+    };
+    let mut options = ScanOptions::new(request.level);
+    options.min_age_floor = Some(Duration::from_secs(request.min_age_floor_secs));
+    options.drives = Some(request.drives.clone());
+    let report = scanner.scan_with(&options, cancel, &mut |progress| {
+        send(HelperMessage::ScanProgress {
+            progress: progress.clone(),
+        });
+    });
+    if !report.cancelled {
+        let files = report
+            .findings
+            .iter()
+            .filter_map(|finding| {
+                Some(ScannedFile {
+                    item: ElevatedItem::from_finding(finding)?,
+                    size_on_disk: finding.size_on_disk,
+                    evidence: finding.evidence.clone(),
+                })
+            })
+            .collect();
+        send(HelperMessage::Scanned {
+            rules: report.rules,
+            files,
+        });
+    }
+    send(HelperMessage::Done);
+}
+
+/// `report` with the admin rules' parts replaced by what the helper's scan
+/// found (D35). Reports and files for any other rule are ignored, and the
+/// findings are numbered again.
+pub fn merge_elevated(
+    report: &ScanReport,
+    elevated: Vec<RuleReport>,
+    files: Vec<ScannedFile>,
+) -> ScanReport {
+    let replaced: Vec<RuleReport> = elevated
+        .into_iter()
+        .filter(|new| {
+            report
+                .rules
+                .iter()
+                .any(|old| old.rule_id == new.rule_id && old.needs_admin)
+        })
+        .collect();
+    let is_replaced = |rule_id: &str| replaced.iter().any(|rule| rule.rule_id == rule_id);
+
+    let rules: Vec<RuleReport> = report
+        .rules
+        .iter()
+        .map(|old| {
+            replaced
+                .iter()
+                .find(|new| new.rule_id == old.rule_id)
+                .cloned()
+                .unwrap_or_else(|| old.clone())
+        })
+        .collect();
+    let mut findings: Vec<Finding> = report
+        .findings
+        .iter()
+        .filter(|finding| !is_replaced(&finding.rule_id))
+        .cloned()
+        .collect();
+    for file in files {
+        let Some(rule) = rules
+            .iter()
+            .find(|rule| rule.rule_id == file.item.rule_id && is_replaced(&rule.rule_id))
+        else {
+            continue;
+        };
+        let Some(snapshot) = file.item.snapshot() else {
+            continue;
+        };
+        findings.push(Finding {
+            id: 0,
+            rule_id: rule.rule_id.clone(),
+            category: rule.category.clone(),
+            risk: rule.risk,
+            path: snapshot.path.clone(),
+            root: file.item.root.clone(),
+            size_on_disk: file.size_on_disk,
+            file_count: 1,
+            last_modified: file.item.modified_secs,
+            needs_admin: true,
+            evidence: file.evidence,
+            target: Target::File(snapshot),
+        });
+    }
+    for (index, finding) in findings.iter_mut().enumerate() {
+        finding.id = index as u64 + 1;
+    }
+    ScanReport {
+        level: report.level,
+        findings_total: findings.len() as u64,
+        size_on_disk_total: findings.iter().map(|f| f.size_on_disk).sum(),
+        rules,
+        findings,
+        cancelled: false,
+        drives: report.drives.clone(),
+    }
 }
 
 /// Why the elevated part of a cleanup didn't run.

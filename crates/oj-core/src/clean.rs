@@ -428,7 +428,10 @@ impl Cleaner<'_> {
                     history.folder_removed(cleanup, mode, &path);
                 }
                 HelperMessage::Refused { message } => refused = Some(message),
-                HelperMessage::Done => {}
+                // Scan messages don't belong in a cleanup.
+                HelperMessage::Done
+                | HelperMessage::ScanProgress { .. }
+                | HelperMessage::Scanned { .. } => {}
             };
             let result = match self.elevator.as_deref_mut() {
                 Some(elevator) => elevator.run(&items, cancel, &mut on_message),

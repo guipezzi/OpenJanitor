@@ -1,4 +1,4 @@
-import { BrushCleaning, ListChecks, Shield, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { BrushCleaning, ListChecks, Shield, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -28,6 +28,8 @@ interface ResultsViewProps {
   /** The user confirmed this cleanup. */
   onClean: (plan: CleanPlan) => void
   onScanAgain: () => void
+  /** "Check with admin rights": scan the rules that couldn't look everywhere again, elevated (D35). */
+  onCheckWithAdmin?: () => void
 }
 
 /**
@@ -36,7 +38,13 @@ interface ResultsViewProps {
  * overview for the same scan (after protecting something) keeps the
  * selection.
  */
-export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }: ResultsViewProps) {
+export function ResultsView({
+  overview,
+  onOverviewChange,
+  onClean,
+  onScanAgain,
+  onCheckWithAdmin,
+}: ResultsViewProps) {
   const { t, i18n } = useTranslation()
   const locale = i18n.language
   const label = useNodeLabel()
@@ -77,7 +85,8 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
   const empty = overview.rules.filter(
     (rule) => rule.findings === 0 && rule.status !== 'protected' && rule.status !== 'not_selected',
   )
-  const notChecked = empty.filter(couldNotRead).map((rule) => rule.name)
+  // Every rule that couldn't look everywhere, whether or not it found something.
+  const notChecked = overview.rules.filter(couldNotRead).map((rule) => rule.name)
   const nothingFound = empty.filter((rule) => !couldNotRead(rule)).map((rule) => rule.name)
 
   // A category picked in the chart: show its details and take the keyboard
@@ -171,10 +180,21 @@ export function ResultsView({ overview, onOverviewChange, onClean, onScanAgain }
       </div>
 
       {notChecked.length > 0 && (
-        <p className="flex gap-2 text-sm text-amber-700 dark:text-amber-400">
-          <ShieldAlert className="mt-0.5 size-4 shrink-0" />
-          {t('results.notChecked', { rules: listFormat.format(notChecked) })}
-        </p>
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-400" />
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <p>{t('results.notChecked', { rules: listFormat.format(notChecked) })}</p>
+            {onCheckWithAdmin && (
+              <p className="text-xs text-muted-foreground">{t('results.checkWithAdminHint')}</p>
+            )}
+          </div>
+          {onCheckWithAdmin && (
+            <Button variant="outline" size="sm" onClick={onCheckWithAdmin}>
+              <ShieldCheck />
+              {t('results.checkWithAdmin')}
+            </Button>
+          )}
+        </div>
       )}
       {nothingFound.length > 0 && (
         <p className="text-sm text-muted-foreground">
