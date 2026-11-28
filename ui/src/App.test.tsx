@@ -25,6 +25,8 @@ import {
   revealInExplorer,
   scan,
   scanChildren,
+  scanWithAdmin,
+  type AdminScanOutcome,
   type NodeView,
   type RuleReport,
   type ScanOutcome,
@@ -62,6 +64,7 @@ vi.mock('./lib/scan', async (importOriginal) => ({
   scanChildren: vi.fn(),
   revealInExplorer: vi.fn(() => Promise.resolve()),
   openRecycleBin: vi.fn(() => Promise.resolve()),
+  scanWithAdmin: vi.fn(),
 }))
 
 const systemDrive: Drive = {
@@ -275,6 +278,47 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Scan' }))
     expect(await screen.findByText(/Nothing to clean on the selected drives/)).toBeInTheDocument()
     expect(screen.queryByText(/already tidy/)).not.toBeInTheDocument()
+  })
+
+  it('checks with admin rights, then shows the complete results', async () => {
+    await scanned()
+    const note = screen.getByText(/Couldn't fully check without administrator rights: System crash dumps\./)
+    expect(note).toBeInTheDocument()
+    expect(screen.getByText(/the check only reads/)).toBeInTheDocument()
+
+    let finish: (outcome: AdminScanOutcome) => void = () => {}
+    vi.mocked(scanWithAdmin).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Check with admin rights' }))
+    expect(await screen.findByText('Waiting for administrator permission…')).toBeInTheDocument()
+    expect(scanWithAdmin).toHaveBeenCalledWith(1, expect.any(Function))
+    expect(screen.getByRole('button', { name: 'Scan again' })).toBeDisabled()
+
+    const complete: ScanOverview = {
+      ...overview,
+      scan_id: 2,
+      rules: overview.rules.map((r) =>
+        r.rule_id === 'windows.crash-dumps.system' ? { ...r, walk: { ...r.walk, unreadable: 0 } } : r,
+      ),
+    }
+    await act(async () => finish({ status: 'completed', overview: complete }))
+    expect(screen.getByText(/Checked with administrator rights/)).toBeInTheDocument()
+    expect(screen.queryByText(/Couldn't fully check/)).not.toBeInTheDocument()
+    expect(screen.getByText('Nothing selected')).toBeInTheDocument()
+  })
+
+  it('keeps the results when administrator permission is declined', async () => {
+    await scanned()
+    vi.mocked(scanWithAdmin).mockResolvedValue({ status: 'declined' })
+    fireEvent.click(screen.getByRole('button', { name: 'Check with admin rights' }))
+
+    expect(await screen.findByText(/Administrator permission was declined/)).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Scan results' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check with admin rights' })).toBeEnabled()
   })
 
   it('clears the results when the drives to scan change', async () => {

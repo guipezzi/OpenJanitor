@@ -27,7 +27,7 @@ pub use clean::{
 pub use drives::{Connection, Drive, DriveStatus, Media};
 pub use elevated::{
     AppMessage, Checker, ElevatedError, ElevatedItem, ElevatedRequest, Elevator, HelperMessage,
-    PROTOCOL_VERSION,
+    HelperRequest, PROTOCOL_VERSION, ScanRequest, ScannedFile,
 };
 pub use history::{History, QuarantineAction};
 pub use history_view::{

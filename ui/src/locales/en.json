@@ -200,6 +200,10 @@
     "cancel": "Cancel",
     "cancelling": "Cancelling…",
     "cancelled": "Scan cancelled. Nothing was changed.",
+    "adminChecking": "Checking the Windows folders with administrator rights. This only reads.",
+    "adminDone": "Checked with administrator rights. The results are complete now, and the selection starts over.",
+    "adminDeclined": "Administrator permission was declined. The results are unchanged.",
+    "adminCancelled": "The check was stopped. The results are unchanged.",
     "idle": "Scanning only reads your drive. Nothing is deleted or moved.",
     "error": "The scan couldn't finish",
     "notInApp": "Scanning works in the desktop app. Start it with \"npm run dev\" from the project folder.",
@@ -274,7 +278,9 @@
     "protectedRules": "Not scanned, because you protected them: {{rules}}",
     "notSelected": "Not scanned, because they're on drives you didn't select: {{rules}}",
     "protectError": "Couldn't protect it: {{error}}",
-    "notChecked": "Couldn't fully check without administrator rights: {{rules}}. Checking with admin rights arrives in a later version.",
+    "notChecked": "Couldn't fully check without administrator rights: {{rules}}.",
+    "checkWithAdmin": "Check with admin rights",
+    "checkWithAdminHint": "Windows asks for permission, and the check only reads. Cleaning what it finds asks again.",
     "needsAdmin": "Needs administrator rights"
   },
   "clean": {

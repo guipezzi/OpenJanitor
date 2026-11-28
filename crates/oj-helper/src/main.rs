@@ -8,9 +8,12 @@
 //!    the app to connect (it exits if nobody does);
 //! 3. checks that the process that connected is the one that started it,
 //!    and is OpenJanitor from the helper's own folder;
-//! 4. reads one request, checks every file in it against OpenJanitor's own
-//!    rules (`oj_core::Checker`), deletes the ones that pass through
-//!    `oj-safety`, and reports each outcome;
+//! 4. reads one request and either
+//!    - cleans: checks every file in it against OpenJanitor's own rules
+//!      (`oj_core::Checker`), deletes the ones that pass through `oj-safety`,
+//!      and reports each outcome (D34); or
+//!    - scans: runs the admin rules with the read-only scanner and reports
+//!      what it found (D35);
 //! 5. exits.
 //!
 //! It never trusts a path it's sent, and it writes nothing of its own: the
@@ -28,8 +31,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
-use oj_core::elevated::serve;
-use oj_core::{CancelToken, Checker, ElevatedRequest, EnvVars, HelperMessage, RuleSet};
+use oj_core::elevated::{scan_elevated, serve};
+use oj_core::{
+    CancelToken, Checker, ElevatedRequest, EnvVars, HelperMessage, HelperRequest, RuleSet,
+    ScanRequest,
+};
 use oj_safety::{DenyList, Executor, Mode, ProtectedList, SystemPaths};
 use oj_windows::elevation::{is_elevated, process_image};
 use oj_windows::pipe::{PipeServer, available};
@@ -131,7 +137,7 @@ fn run() -> Result<(), String> {
         .read_line(&mut line)
         .map_err(|e| format!("couldn't read the request: {e}"))?;
     let mut send = sender(&pipe);
-    let request: ElevatedRequest = match serde_json::from_str(&line) {
+    let request: HelperRequest = match serde_json::from_str(&line) {
         Ok(request) => request,
         Err(e) => {
             send(HelperMessage::Refused {
@@ -140,6 +146,36 @@ fn run() -> Result<(), String> {
             return Err("unreadable request".into());
         }
     };
+    let rules = RuleSet::bundled().map_err(|e| e.to_string())?;
+    let system = SystemPaths::discover().map_err(|e| e.to_string())?;
+    let deny = DenyList::new(&system).map_err(|e| e.to_string())?;
+    let cancel = CancelToken::new();
+    let mut send_and_listen = |message: HelperMessage| {
+        send(message);
+        // The only thing the app sends after the request is "stop".
+        if available(&pipe).unwrap_or(1) > 0 {
+            cancel.cancel();
+        }
+    };
+    match request {
+        HelperRequest::Clean(request) => {
+            clean(&request, &rules, &deny, &cancel, &mut send_and_listen)
+        }
+        HelperRequest::Scan(request) => {
+            scan(&request, &rules, &deny, &cancel, &mut send_and_listen);
+            Ok(())
+        }
+    }
+}
+
+/// Deletes the files of a cleanup that pass the checks (D34).
+fn clean(
+    request: &ElevatedRequest,
+    rules: &RuleSet,
+    deny: &DenyList,
+    cancel: &CancelToken,
+    send: &mut dyn FnMut(HelperMessage),
+) -> Result<(), String> {
     let protected = match ProtectedList::from_entries(request.protected.clone()) {
         Ok(protected) => protected,
         Err(e) => {
@@ -150,34 +186,33 @@ fn run() -> Result<(), String> {
         }
     };
 
-    let rules = RuleSet::bundled().map_err(|e| e.to_string())?;
-    let system = SystemPaths::discover().map_err(|e| e.to_string())?;
-    let deny = DenyList::new(&system).map_err(|e| e.to_string())?;
     // A dry run if either side says so.
     let mode = if request.mode == Mode::DryRun || Mode::from_env() == Mode::DryRun {
         Mode::DryRun
     } else {
         Mode::Live
     };
-    let executor = Executor::new(mode, &deny).with_protected_list(protected.clone());
+    let executor = Executor::new(mode, deny).with_protected_list(protected.clone());
     let checker = Checker::new(
-        &rules,
+        rules,
         &EnvVars,
         &protected,
         Duration::from_secs(request.min_age_floor_secs),
         SystemTime::now(),
     );
-
-    let cancel = CancelToken::new();
-    let mut send_and_listen = |message: HelperMessage| {
-        send(message);
-        // The only thing the app sends after the request is "stop".
-        if available(&pipe).unwrap_or(1) > 0 {
-            cancel.cancel();
-        }
-    };
-    serve(&request, &checker, &executor, &cancel, &mut send_and_listen);
+    serve(request, &checker, &executor, cancel, send);
     Ok(())
+}
+
+/// Scans the admin rules with administrator rights, only reading (D35).
+fn scan(
+    request: &ScanRequest,
+    rules: &RuleSet,
+    deny: &DenyList,
+    cancel: &CancelToken,
+    send: &mut dyn FnMut(HelperMessage),
+) {
+    scan_elevated(request, rules, &EnvVars, deny, cancel, send);
 }
 
 /// Writes messages to the app, one JSON line each. Once a write fails (the

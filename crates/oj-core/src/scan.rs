@@ -8,7 +8,7 @@ use oj_safety::{
     BinContents, CancelToken, DenyList, FileSnapshot, NormPath, ProtectedList, RecycleBin,
     WalkStats, walk_files,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::age::{DEFAULT_MIN_AGE, describe};
 use crate::rule::{App, CompiledRule, Level, RECYCLE_BIN, Risk, RuleSet};
@@ -89,7 +89,7 @@ pub struct Finding {
     pub target: Target,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleStatus {
     Scanned,
@@ -103,8 +103,9 @@ pub enum RuleStatus {
     Protected,
 }
 
-/// What one rule found.
-#[derive(Debug, Clone, Serialize)]
+/// What one rule found. It reads back from JSON too: the elevated helper's
+/// scan reports this way (D35).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleReport {
     pub rule_id: String,
     pub name: String,
@@ -154,7 +155,7 @@ pub struct ScanReport {
 }
 
 /// Where a running scan is, for progress displays.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanProgress {
     /// Position of the rule being scanned, counting from 0.
     pub rule_index: usize,

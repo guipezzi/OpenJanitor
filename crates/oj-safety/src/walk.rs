@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::attrs::{EntryClass, classify_metadata};
 use crate::deny::DenyList;
@@ -15,7 +15,7 @@ use crate::snapshot::FileSnapshot;
 const MAX_SAMPLES: usize = 10;
 
 /// What a walk saw and skipped.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalkStats {
     pub files: u64,
     pub directories: u64,

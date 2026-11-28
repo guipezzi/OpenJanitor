@@ -34,6 +34,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::scan,
             commands::cancel_scan,
+            commands::scan_with_admin,
             commands::scan_children,
             commands::reveal_in_explorer,
             commands::open_recycle_bin,

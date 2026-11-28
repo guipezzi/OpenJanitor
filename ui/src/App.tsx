@@ -26,6 +26,7 @@ import {
   cancelScan,
   canScan,
   scan,
+  scanWithAdmin,
   type ScanOverview,
   type ScanProgress,
 } from '@/lib/scan'
@@ -50,9 +51,11 @@ export default function App() {
   const [report, setReport] = useState<CleanReport | null>(null)
   const [error, setError] = useState<Failure | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // "Check with admin rights" is running (D35).
+  const [checkingAdmin, setCheckingAdmin] = useState(false)
   // Bumped after each scan and cleanup, so the drive bars show fresh space.
   const [drivesVersion, setDrivesVersion] = useState(0)
-  const busy = scanning || cleaning !== null
+  const busy = scanning || checkingAdmin || cleaning !== null
 
   // The Rust side forgot the results: they no longer match the drives.
   function drivesChanged() {
@@ -88,6 +91,31 @@ export default function App() {
       setCancelling(false)
       setProgress(null)
       setDrivesVersion((version) => version + 1)
+    }
+  }
+
+  // Scans the admin rules again with administrator rights. The results stay
+  // as they are unless it finishes.
+  async function checkWithAdmin() {
+    if (!overview) return
+    setError(null)
+    setNotice(null)
+    setProgress(null)
+    setCheckingAdmin(true)
+    try {
+      const outcome = await scanWithAdmin(overview.scan_id, setProgress)
+      if (outcome.status === 'completed') {
+        setOverview(outcome.overview)
+        setNotice(t('scan.adminDone'))
+      } else {
+        setNotice(outcome.status === 'declined' ? t('scan.adminDeclined') : t('scan.adminCancelled'))
+      }
+    } catch (cause) {
+      setError({ during: 'scan', message: String(cause) })
+    } finally {
+      setCheckingAdmin(false)
+      setCancelling(false)
+      setProgress(null)
     }
   }
 
@@ -131,6 +159,8 @@ export default function App() {
   let content
   if (scanning) {
     content = <ScanProgressPanel progress={progress} cancelling={cancelling} onCancel={stopScan} />
+  } else if (checkingAdmin) {
+    content = <ScanProgressPanel progress={progress} cancelling={cancelling} onCancel={stopScan} admin />
   } else if (cleaning) {
     content = (
       <CleanProgressPanel
@@ -145,13 +175,22 @@ export default function App() {
   } else if (overview) {
     content =
       overview.categories.length > 0 ? (
-        <ResultsView
-          key={overview.scan_id}
-          overview={overview}
-          onOverviewChange={setOverview}
-          onClean={(plan) => void clean(plan)}
-          onScanAgain={() => void runScan()}
-        />
+        <>
+          {notice && (
+            <p className="flex gap-2 text-sm text-muted-foreground" role="status">
+              <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" />
+              {notice}
+            </p>
+          )}
+          <ResultsView
+            key={overview.scan_id}
+            overview={overview}
+            onOverviewChange={setOverview}
+            onClean={(plan) => void clean(plan)}
+            onScanAgain={() => void runScan()}
+            onCheckWithAdmin={() => void checkWithAdmin()}
+          />
+        </>
       ) : (
         <>
           <ScanSummary overview={overview} />

@@ -10,9 +10,11 @@ interface ScanProgressPanelProps {
   progress: ScanProgress | null
   cancelling: boolean
   onCancel: () => void
+  /** "Check with admin rights": Windows asks first, then the helper scans. */
+  admin?: boolean
 }
 
-export function ScanProgressPanel({ progress, cancelling, onCancel }: ScanProgressPanelProps) {
+export function ScanProgressPanel({ progress, cancelling, onCancel, admin = false }: ScanProgressPanelProps) {
   const { t, i18n } = useTranslation()
   const percent = progress ? Math.round((progress.rule_index / progress.rule_count) * 100) : 0
 
@@ -21,8 +23,13 @@ export function ScanProgressPanel({ progress, cancelling, onCancel }: ScanProgre
       <div className="flex items-center gap-4">
         <div className="min-w-0 flex-1 space-y-1" aria-live="polite">
           <p className="truncate text-sm font-medium">
-            {progress ? t('scan.checking', { rule: progress.rule_name }) : t('scan.starting')}
+            {progress
+              ? t('scan.checking', { rule: progress.rule_name })
+              : admin
+                ? t('clean.adminWaiting')
+                : t('scan.starting')}
           </p>
+          {admin && <p className="text-xs text-muted-foreground">{t('scan.adminChecking')}</p>}
           {progress && (
             <p className="text-xs text-muted-foreground tabular-nums">
               {t('scan.stepDetail', {
